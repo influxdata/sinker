@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    Api, CustomResource, CustomResourceExt, ResourceExt,
+    Api, Config, CustomResource, CustomResourceExt, ResourceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -137,8 +137,15 @@ async fn main() -> Result<()> {
         let secrets: Api<Secret> = Api::namespaced(rt.client(), &namespace);
 
         let sec = secrets.get(&secret_ref.name).await?;
-        let len = sec.data.unwrap().get(&secret_ref.key).unwrap().0.len();
-        debug!(?len, "got secret ok");
+
+        let kube_config = kube::config::Kubeconfig::from_yaml(std::str::from_utf8(
+            &sec.data.unwrap().get(&secret_ref.key).unwrap().0,
+        )?)?;
+        let config = Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
+        let remote_client: kube::Client = kube::Client::try_from(config)?;
+
+        let version = remote_client.apiserver_version().await?;
+        debug!(?version, "remote cluster version");
     }
 
     if !keep_running {
