@@ -7,7 +7,7 @@ spec:
   source:
     resourceRef:
       kind: ConfigMap
-      name: demo
+      name: kube-root-ca.crt
     cluster:
       namespace: default
       kubeConfig:

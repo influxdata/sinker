@@ -4,7 +4,8 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    Api, Config, CustomResource, CustomResourceExt, ResourceExt,
+    core::{DynamicObject, GroupVersionKind},
+    Api, Config, CustomResource, CustomResourceExt, Discovery, ResourceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -146,6 +147,25 @@ async fn main() -> Result<()> {
 
         let version = remote_client.apiserver_version().await?;
         debug!(?version, "remote cluster version");
+
+        let source_ref = &sinker.spec.source.resource_ref;
+
+        let discovery = Discovery::new(remote_client.clone()).run().await?;
+        let group = discovery
+            .get(source_ref.api_group.as_deref().unwrap_or_default())
+            .ok_or(anyhow!("cannot find group"))?;
+        let gvk = GroupVersionKind::gvk(
+            group.name(),
+            group.preferred_version_or_latest(),
+            &source_ref.kind,
+        );
+        let (ar, _) = discovery
+            .resolve_gvk(&gvk)
+            .ok_or(anyhow!("cannot find api resource"))?;
+        let api: Api<DynamicObject> = Api::namespaced_with(remote_client.clone(), namespace, &ar);
+        let resource = api.get(&sinker.spec.source.resource_ref.name).await?;
+
+        debug!(?resource, "got remote object");
     }
 
     if !keep_running {
