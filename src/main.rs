@@ -84,6 +84,9 @@ struct Args {
 
     #[clap(flatten)]
     admin: kubert::AdminArgs,
+
+    #[clap(long, env = "SINKER_KEEP_RUNNING")]
+    keep_running: bool,
 }
 
 #[tokio::main]
@@ -93,6 +96,7 @@ async fn main() -> Result<()> {
         log_format,
         client,
         admin,
+        keep_running,
     } = Args::parse();
 
     let rt = kubert::Runtime::builder()
@@ -113,6 +117,10 @@ async fn main() -> Result<()> {
     .await?;
 
     debug!("CRD applied");
+
+    if !keep_running {
+        return Ok(());
+    }
 
     rt.run().await?;
     Ok(())
