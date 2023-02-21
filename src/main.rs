@@ -21,20 +21,23 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
     namespaced
 )]
 #[kube(status = "ResourceSyncStatus")]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceSyncSpec {
-    source: ClusterResourceRef,
-    destination: ClusterResourceRef,
+    pub source: ClusterResourceRef,
+    pub destination: ClusterResourceRef,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceSyncStatus {
-    demo: String,
+    pub demo: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterResourceRef {
-    resource_ref: ResourceRef,
+    pub resource_ref: ResourceRef,
+    pub cluster: Option<ClusterRef>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
@@ -44,6 +47,25 @@ pub struct ResourceRef {
     pub kind: String,
     pub name: String,
     pub namespace: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterRef {
+    pub kube_config: KubeConfig,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeConfig {
+    pub secret_ref: SecretRef,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRef {
+    pub name: String,
+    pub key: String,
 }
 
 #[derive(Clone, Parser)]

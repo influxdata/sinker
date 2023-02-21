@@ -9,6 +9,11 @@ spec:
       kind: ConfigMap
       name: demo
       namespace: default
+    cluster:
+      kubeConfig:
+        secretRef:
+          name: k3-test-27-kubeconfig
+          key: value
   destination:
     resourceRef:
       kind: ConfigMap
