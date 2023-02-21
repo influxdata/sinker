@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    Api, CustomResource, CustomResourceExt,
+    Api, CustomResource, CustomResourceExt, ResourceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -125,15 +125,18 @@ async fn main() -> Result<()> {
     let rs: Api<ResourceSync> = Api::all(rt.client());
     let sinkers = rs.list(&ListParams::default()).await?;
     for sinker in sinkers {
+        let sinker_ns = sinker.namespace();
+
         debug!(?sinker.spec, "got");
         let secret_ref = sinker.spec.source.cluster.unwrap().kube_config.secret_ref;
         let secret_name = secret_ref.name;
 
-        let secrets: Api<Secret> = if let Some(ref namespace) = secret_ref.namespace {
-            Api::namespaced(rt.client(), namespace)
-        } else {
-            Api::default_namespaced(rt.client())
-        };
+        let namespace = secret_ref
+            .namespace
+            .as_ref()
+            .or(sinker_ns.as_ref())
+            .unwrap();
+        let secrets: Api<Secret> = Api::namespaced(rt.client(), &namespace);
 
         let sec = secrets.get(&secret_name).await?;
         let len = sec.data.unwrap().get("value").unwrap().0.len();
