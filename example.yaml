@@ -1,0 +1,16 @@
+apiVersion: sinker.mkm.pub/v1alpha1
+kind: ResourceSync
+metadata:
+  name: demo
+  namespace: default
+spec:
+  source:
+    resourceRef:
+      kind: ConfigMap
+      name: demo
+      namespace: default
+  destination:
+    resourceRef:
+      kind: ConfigMap
+      name: demo
+      namespace: default

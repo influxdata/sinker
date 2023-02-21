@@ -32,13 +32,15 @@ pub struct ResourceSyncStatus {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterResourceRef {
     resource_ref: ResourceRef,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceRef {
-    pub api_group: String,
+    pub api_group: Option<String>,
     pub kind: String,
     pub name: String,
     pub namespace: Option<String>,
