@@ -68,6 +68,7 @@ pub struct KubeConfig {
 #[serde(rename_all = "camelCase")]
 pub struct SecretRef {
     pub name: String,
+    pub namespace: Option<String>, // should we allow this?
     pub key: String,
 }
 
@@ -125,9 +126,16 @@ async fn main() -> Result<()> {
     let sinkers = rs.list(&ListParams::default()).await?;
     for sinker in sinkers {
         debug!(?sinker.spec, "got");
-        let secrets: Api<Secret> = Api::namespaced(rt.client(), "default");
+        let secret_ref = sinker.spec.source.cluster.unwrap().kube_config.secret_ref;
+        let secret_name = secret_ref.name;
 
-        let sec = secrets.get("k3-test-27-kubeconfig").await?;
+        let secrets: Api<Secret> = if let Some(ref namespace) = secret_ref.namespace {
+            Api::namespaced(rt.client(), namespace)
+        } else {
+            Api::default_namespaced(rt.client())
+        };
+
+        let sec = secrets.get(&secret_name).await?;
         let len = sec.data.unwrap().get("value").unwrap().0.len();
         debug!(?len, "got secret ok");
     }
