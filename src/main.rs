@@ -132,10 +132,10 @@ async fn main() -> Result<()> {
         let secret_ref = &cluster_ref.unwrap().kube_config.secret_ref;
 
         let namespace = cluster_ref
-            .and_then(|cluster_ref| cluster_ref.namespace.as_ref())
-            .or(sinker_ns.as_ref())
+            .and_then(|cluster_ref| cluster_ref.namespace.as_deref())
+            .or(sinker_ns.as_deref())
             .ok_or(anyhow!("ResourceSync resource must have a namespace"))?;
-        let secrets: Api<Secret> = Api::namespaced(rt.client(), &namespace);
+        let secrets: Api<Secret> = Api::namespaced(rt.client(), namespace);
 
         let sec = secrets.get(&secret_ref.name).await?;
 
