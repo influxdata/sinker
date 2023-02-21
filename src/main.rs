@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    core::{DynamicObject, GroupVersionKind, TypeMeta},
+    core::{gvk::ParseGroupVersionError, DynamicObject, GroupVersionKind, TypeMeta},
     discovery, Api, Config, CustomResource, CustomResourceExt, ResourceExt,
 };
 use schemars::JsonSchema;
@@ -50,6 +50,24 @@ pub struct ResourceRef {
     pub api_version: String,
     pub kind: String,
     pub name: String,
+}
+
+impl From<&ResourceRef> for TypeMeta {
+    fn from(value: &ResourceRef) -> Self {
+        TypeMeta {
+            api_version: value.api_version.clone(),
+            kind: value.kind.clone(),
+        }
+    }
+}
+
+impl TryFrom<&ResourceRef> for GroupVersionKind {
+    type Error = ParseGroupVersionError;
+
+    fn try_from(value: &ResourceRef) -> std::result::Result<Self, Self::Error> {
+        let type_meta: TypeMeta = value.into();
+        type_meta.try_into()
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
@@ -150,13 +168,7 @@ async fn main() -> Result<()> {
 
         let source_ref = &sinker.spec.source.resource_ref;
 
-        let gvk: GroupVersionKind = TypeMeta {
-            api_version: source_ref.api_version.clone(),
-            kind: source_ref.kind.clone(),
-        }
-        .try_into()?;
-
-        let (ar, _) = discovery::pinned_kind(&remote_client, &gvk).await?;
+        let (ar, _) = discovery::pinned_kind(&remote_client, &source_ref.try_into()?).await?;
         let api: Api<DynamicObject> = Api::namespaced_with(remote_client.clone(), namespace, &ar);
         let resource = api.get(&sinker.spec.source.resource_ref.name).await?;
 
