@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use tracing::{debug, error, info};
 
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+use k8s_openapi::{
+    api::core::v1::Secret,
+    apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
+};
 #[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
 #[kube(
     group = "sinker.mkm.pub",
@@ -122,6 +125,11 @@ async fn main() -> Result<()> {
     let sinkers = rs.list(&ListParams::default()).await?;
     for sinker in sinkers {
         debug!(?sinker.spec, "got");
+        let secrets: Api<Secret> = Api::namespaced(rt.client(), "default");
+
+        let sec = secrets.get("k3-test-27-kubeconfig").await?;
+        let len = sec.data.unwrap().get("value").unwrap().0.len();
+        debug!(?len, "got secret ok");
     }
 
     if !keep_running {
