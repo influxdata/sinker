@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::Parser;
 use kube::{
-    api::{Patch, PatchParams},
+    api::{ListParams, Patch, PatchParams},
     Api, CustomResource, CustomResourceExt,
 };
 use schemars::JsonSchema;
@@ -118,10 +118,15 @@ async fn main() -> Result<()> {
 
     debug!("CRD applied");
 
+    let rs: Api<ResourceSync> = Api::all(rt.client());
+    let sinkers = rs.list(&ListParams::default()).await?;
+    for sinker in sinkers {
+        debug!(?sinker.spec, "got");
+    }
+
     if !keep_running {
         return Ok(());
     }
-
     rt.run().await?;
     Ok(())
 }
