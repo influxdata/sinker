@@ -4,8 +4,8 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    core::{DynamicObject, GroupVersionKind},
-    Api, Config, CustomResource, CustomResourceExt, Discovery, ResourceExt,
+    core::{DynamicObject, GroupVersionKind, TypeMeta},
+    discovery, Api, Config, CustomResource, CustomResourceExt, ResourceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ pub struct ClusterResourceRef {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceRef {
-    pub api_group: Option<String>,
+    pub api_version: String,
     pub kind: String,
     pub name: String,
 }
@@ -150,18 +150,13 @@ async fn main() -> Result<()> {
 
         let source_ref = &sinker.spec.source.resource_ref;
 
-        let discovery = Discovery::new(remote_client.clone()).run().await?;
-        let group = discovery
-            .get(source_ref.api_group.as_deref().unwrap_or_default())
-            .ok_or(anyhow!("cannot find group"))?;
-        let gvk = GroupVersionKind::gvk(
-            group.name(),
-            group.preferred_version_or_latest(),
-            &source_ref.kind,
-        );
-        let (ar, _) = discovery
-            .resolve_gvk(&gvk)
-            .ok_or(anyhow!("cannot find api resource"))?;
+        let gvk: GroupVersionKind = TypeMeta {
+            api_version: source_ref.api_version.clone(),
+            kind: source_ref.kind.clone(),
+        }
+        .try_into()?;
+
+        let (ar, _) = discovery::pinned_kind(&remote_client, &gvk).await?;
         let api: Api<DynamicObject> = Api::namespaced_with(remote_client.clone(), namespace, &ar);
         let resource = api.get(&sinker.spec.source.resource_ref.name).await?;
 
