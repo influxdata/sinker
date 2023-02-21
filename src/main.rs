@@ -1,6 +1,6 @@
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::bare_urls, rust_2018_idioms)]
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
@@ -49,12 +49,12 @@ pub struct ResourceRef {
     pub api_group: Option<String>,
     pub kind: String,
     pub name: String,
-    pub namespace: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRef {
+    pub namespace: Option<String>,
     pub kube_config: KubeConfig,
 }
 
@@ -68,7 +68,6 @@ pub struct KubeConfig {
 #[serde(rename_all = "camelCase")]
 pub struct SecretRef {
     pub name: String,
-    pub namespace: Option<String>, // should we allow this?
     pub key: String,
 }
 
@@ -128,18 +127,17 @@ async fn main() -> Result<()> {
         let sinker_ns = sinker.namespace();
 
         debug!(?sinker.spec, "got");
-        let secret_ref = sinker.spec.source.cluster.unwrap().kube_config.secret_ref;
-        let secret_name = secret_ref.name;
+        let cluster_ref = sinker.spec.source.cluster.as_ref();
+        let secret_ref = &cluster_ref.unwrap().kube_config.secret_ref;
 
-        let namespace = secret_ref
-            .namespace
-            .as_ref()
+        let namespace = cluster_ref
+            .and_then(|cluster_ref| cluster_ref.namespace.as_ref())
             .or(sinker_ns.as_ref())
-            .unwrap();
+            .ok_or(anyhow!("ResourceSync resource must have a namespace"))?;
         let secrets: Api<Secret> = Api::namespaced(rt.client(), &namespace);
 
-        let sec = secrets.get(&secret_name).await?;
-        let len = sec.data.unwrap().get("value").unwrap().0.len();
+        let sec = secrets.get(&secret_ref.name).await?;
+        let len = sec.data.unwrap().get(&secret_ref.key).unwrap().0.len();
         debug!(?len, "got secret ok");
     }
 

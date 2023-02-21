@@ -8,8 +8,8 @@ spec:
     resourceRef:
       kind: ConfigMap
       name: demo
-      namespace: default
     cluster:
+      namespace: default
       kubeConfig:
         secretRef:
           name: k3-test-27-kubeconfig
@@ -18,4 +18,3 @@ spec:
     resourceRef:
       kind: ConfigMap
       name: demo
-      namespace: default
