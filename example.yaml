@@ -15,7 +15,7 @@ spec:
         secretRef:
           name: k3-test-27-kubeconfig
           key: value
-  destination:
+  target:
     resourceRef:
       apiVersion: v1
       kind: ConfigMap

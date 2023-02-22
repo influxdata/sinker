@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    core::{gvk::ParseGroupVersionError, DynamicObject, GroupVersionKind, TypeMeta},
+    core::{gvk::ParseGroupVersionError, DynamicObject, GroupVersionKind, ObjectMeta, TypeMeta},
     discovery, Api, Config, CustomResource, CustomResourceExt, ResourceExt,
 };
 use schemars::JsonSchema;
@@ -17,6 +17,9 @@ use k8s_openapi::{
     api::core::v1::Secret,
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
 };
+
+const CONTROLLER_GROUP: &str = "sinker.mkm.pub";
+
 #[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
 #[kube(
     group = "sinker.mkm.pub",
@@ -28,7 +31,7 @@ use k8s_openapi::{
 #[serde(rename_all = "camelCase")]
 pub struct ResourceSyncSpec {
     pub source: ClusterResourceRef,
-    pub destination: ClusterResourceRef,
+    pub target: ClusterResourceRef,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
@@ -130,7 +133,7 @@ async fn main() -> Result<()> {
 
     let crds: Api<CustomResourceDefinition> = Api::all(rt.client());
 
-    let ssapply = PatchParams::apply("crd_apply").force();
+    let ssapply = PatchParams::apply(CONTROLLER_GROUP).force();
     crds.patch(
         "resourcesyncs.sinker.mkm.pub",
         &ssapply,
@@ -167,12 +170,26 @@ async fn main() -> Result<()> {
         debug!(?version, "remote cluster version");
 
         let source_ref = &sinker.spec.source.resource_ref;
-
         let (ar, _) = discovery::pinned_kind(&remote_client, &source_ref.try_into()?).await?;
         let api: Api<DynamicObject> = Api::namespaced_with(remote_client.clone(), namespace, &ar);
-        let resource = api.get(&sinker.spec.source.resource_ref.name).await?;
+        let mut resource = api.get(&sinker.spec.source.resource_ref.name).await?;
 
         debug!(?resource, "got remote object");
+
+        let target_ref = &sinker.spec.target.resource_ref;
+        resource.metadata = ObjectMeta {
+            name: Some(target_ref.name.clone()),
+            ..Default::default()
+        };
+        debug!(?resource, "patched remote object");
+
+        let local_client = rt.client();
+        let (ar, _) = discovery::pinned_kind(&local_client, &target_ref.try_into()?).await?;
+        let api: Api<DynamicObject> = Api::namespaced_with(local_client.clone(), namespace, &ar);
+
+        let ssapply = PatchParams::apply(CONTROLLER_GROUP).force();
+        api.patch(&target_ref.name, &ssapply, &Patch::Apply(&resource))
+            .await?;
     }
 
     if !keep_running {
