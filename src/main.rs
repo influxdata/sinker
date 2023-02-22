@@ -5,7 +5,7 @@ use clap::Parser;
 use kube::{
     api::{ListParams, Patch, PatchParams},
     core::{gvk::ParseGroupVersionError, DynamicObject, GroupVersionKind, ObjectMeta, TypeMeta},
-    discovery, Api, Config, CustomResource, CustomResourceExt, ResourceExt,
+    discovery, Api, Config, CustomResource, CustomResourceExt, Resource, ResourceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,6 @@ use k8s_openapi::{
     api::core::v1::Secret,
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
 };
-
-const CONTROLLER_GROUP: &str = "sinker.mkm.pub";
 
 #[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
 #[kube(
@@ -133,9 +131,9 @@ async fn main() -> Result<()> {
 
     let crds: Api<CustomResourceDefinition> = Api::all(rt.client());
 
-    let ssapply = PatchParams::apply(CONTROLLER_GROUP).force();
+    let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
     crds.patch(
-        "resourcesyncs.sinker.mkm.pub",
+        &ResourceSync::crd().metadata.name.unwrap(),
         &ssapply,
         &Patch::Apply(ResourceSync::crd()),
     )
@@ -187,7 +185,7 @@ async fn main() -> Result<()> {
         let (ar, _) = discovery::pinned_kind(&local_client, &target_ref.try_into()?).await?;
         let api: Api<DynamicObject> = Api::namespaced_with(local_client.clone(), namespace, &ar);
 
-        let ssapply = PatchParams::apply(CONTROLLER_GROUP).force();
+        let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
         api.patch(&target_ref.name, &ssapply, &Patch::Apply(&resource))
             .await?;
     }
