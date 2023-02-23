@@ -20,3 +20,6 @@ spec:
       apiVersion: v1
       kind: ConfigMap
       name: demo
+  mappings:
+    - fromFieldPath: data
+      toFieldPath: data

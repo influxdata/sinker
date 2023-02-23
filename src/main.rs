@@ -30,6 +30,15 @@ use k8s_openapi::{
 pub struct ResourceSyncSpec {
     pub source: ClusterResourceRef,
     pub target: ClusterResourceRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mappings: Vec<Mapping>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Mapping {
+    pub from_field_path: Option<String>,
+    pub to_field_path: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
