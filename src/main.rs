@@ -184,8 +184,15 @@ async fn main() -> Result<()> {
         debug!(?resource, "got remote object");
 
         let target_ref = &sinker.spec.target.resource_ref;
+        let annotations = resource.metadata.annotations.map(|mut annotations| {
+            annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
+            annotations
+        });
+
         resource.metadata = ObjectMeta {
             name: Some(target_ref.name.clone()),
+            annotations: annotations,
+            labels: resource.metadata.labels,
             ..Default::default()
         };
         debug!(?resource, "patched remote object");
@@ -194,9 +201,59 @@ async fn main() -> Result<()> {
         let (ar, _) = discovery::pinned_kind(&local_client, &target_ref.try_into()?).await?;
         let api: Api<DynamicObject> = Api::namespaced_with(local_client.clone(), namespace, &ar);
 
-        let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
-        api.patch(&target_ref.name, &ssapply, &Patch::Apply(&resource))
-            .await?;
+        if sinker.spec.mappings.is_empty() {
+            let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
+            api.patch(&target_ref.name, &ssapply, &Patch::Apply(&resource))
+                .await?;
+        } else {
+            info!("TODO MAPPINGS");
+            let mut template = DynamicObject::new(&target_ref.name, &ar);
+            template.metadata = ObjectMeta {
+                name: Some(target_ref.name.clone()),
+                namespace: sinker.namespace(),
+                ..Default::default()
+            };
+            assert_eq!(sinker.spec.mappings.len(), 1);
+            let mapping = &sinker.spec.mappings[0];
+            let resource_json = serde_json::to_value(&resource)?;
+            let from_field_path = if let Some(from_field_path) = &mapping.from_field_path {
+                format!("$.{}", from_field_path)
+            } else {
+                "$".to_string()
+            };
+            let subtree = jsonpath_lib::select(&resource_json, &from_field_path)?;
+            assert_eq!(subtree.len(), 1);
+            let subtree = subtree[0];
+            debug!(?subtree);
+
+            let mut parents = from_field_path
+                .split(".")
+                .skip(1)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev();
+            let leaf = parents.next().unwrap();
+            let mut parent = serde_json::Map::new();
+            parent.insert(leaf.to_string(), subtree.clone());
+
+            debug!(?leaf);
+            for level in parents {
+                debug!(?level, "level");
+                let mut next = serde_json::Map::new();
+                next.insert(level.to_string(), serde_json::Value::Object(parent));
+                parent = next;
+            }
+
+            let root = serde_json::Value::Object(parent);
+            template.data = root;
+
+            let dbg = serde_json::to_string_pretty(&template)?;
+            eprintln!("{}", dbg);
+
+            let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
+            api.patch(&target_ref.name, &ssapply, &Patch::Apply(&template))
+                .await?;
+        }
     }
 
     if !keep_running {

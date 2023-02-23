@@ -8,7 +8,7 @@ spec:
     resourceRef:
       apiVersion: v1
       kind: ConfigMap
-      name: kube-root-ca.crt
+      name: remote-demo
     cluster:
       namespace: default
       kubeConfig:
@@ -21,5 +21,5 @@ spec:
       kind: ConfigMap
       name: demo
   mappings:
-    - fromFieldPath: data
-      toFieldPath: data
+    - fromFieldPath: data.remote
+      toFieldPath: data.remote
