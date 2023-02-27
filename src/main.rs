@@ -289,10 +289,9 @@ fn add_to_path(
                 }
                 // otherwise, we have to create an object that will hold the leaf or a subtree, and iterate on.
                 Some((field, rest)) => {
-                    map.insert(field.to_string(), json!({}));
-                    map = match map.get_mut(field).unwrap() {
+                    map = match map.entry(field).or_insert(json!({})) {
                         Object(inner_map) => inner_map,
-                        _ => unreachable!(), // we know it's an object, we just inserted it above as `json!{}`
+                        _ => return Err(AddToPathError::ObjectRequired()),
                     };
                     path = rest;
                 }
@@ -306,19 +305,24 @@ fn add_to_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
-    #[test]
-    fn test_add_to_path() {
-        let mut root = json!({"foo":[]});
-        println!("before:\n{}", serde_json::to_string_pretty(&root).unwrap());
-
+    #[rstest]
+    #[case("status", r#"{"spec":{},"status":"demo"}"#)]
+    #[case("status.foo", r#"{"spec":{},"status":{"keep":1,"foo":"demo"}}"#)]
+    #[case(
+        "status.foo.bar",
+        r#"{"spec":{},"status":{"keep":1,"foo":{"bar":"demo"}}}"#
+    )]
+    fn test_add_to_path(#[case] path: &str, #[case] expected: &str) {
+        let mut root = json!({ "spec": {}, "status": {"keep": 1} });
         add_to_path(
             &mut root,
-            "foo.bar.baz",
+            path,
             serde_json::Value::String("demo".to_string()),
         )
         .unwrap();
 
-        println!("after:\n{}", serde_json::to_string_pretty(&root).unwrap());
+        assert_eq!(serde_json::to_string(&root).unwrap(), expected);
     }
 }
