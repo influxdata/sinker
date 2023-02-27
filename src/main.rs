@@ -9,6 +9,7 @@ use kube::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[allow(unused_imports)]
 use tracing::{debug, error, info};
@@ -261,4 +262,63 @@ async fn main() -> Result<()> {
     }
     rt.run().await?;
     Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AddToPathError {
+    #[error("Value must be an object")]
+    ObjectRequired(),
+}
+
+fn add_to_path(
+    root: &mut serde_json::Value,
+    path: &str,
+    leaf: serde_json::Value,
+) -> std::result::Result<(), AddToPathError> {
+    use serde_json::Value::Object;
+
+    if let Object(map) = root {
+        let mut map = map;
+        let mut path = path;
+        loop {
+            match path.split_once(".") {
+                // this is the leaf field, just add it to the map and we're done.
+                None => {
+                    map.insert(path.to_string(), leaf);
+                    return Ok(());
+                }
+                // otherwise, we have to create an object that will hold the leaf or a subtree, and iterate on.
+                Some((field, rest)) => {
+                    map.insert(field.to_string(), json!({}));
+                    map = match map.get_mut(field).unwrap() {
+                        Object(inner_map) => inner_map,
+                        _ => unreachable!(), // we know it's an object, we just inserted it above as `json!{}`
+                    };
+                    path = rest;
+                }
+            };
+        }
+    } else {
+        Err(AddToPathError::ObjectRequired())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_to_path() {
+        let mut root = json!({"foo":[]});
+        println!("before:\n{}", serde_json::to_string_pretty(&root).unwrap());
+
+        add_to_path(
+            &mut root,
+            "foo.bar.baz",
+            serde_json::Value::String("demo".to_string()),
+        )
+        .unwrap();
+
+        println!("after:\n{}", serde_json::to_string_pretty(&root).unwrap());
+    }
 }

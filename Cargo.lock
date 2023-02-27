@@ -1430,6 +1430,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
 ]
