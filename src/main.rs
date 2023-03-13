@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
 
         resource.metadata = ObjectMeta {
             name: Some(target_ref.name.clone()),
-            annotations: annotations,
+            annotations,
             labels: resource.metadata.labels,
             ..Default::default()
         };
@@ -222,34 +222,20 @@ async fn main() -> Result<()> {
             } else {
                 "$".to_string()
             };
+            let to_field_path = mapping.to_field_path.as_deref().unwrap_or("");
+
             let subtree = jsonpath_lib::select(&resource_json, &from_field_path)?;
             assert_eq!(subtree.len(), 1);
             let subtree = subtree[0];
             debug!(?subtree);
 
-            let mut parents = from_field_path
-                .split(".")
-                .skip(1)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev();
-            let leaf = parents.next().unwrap();
-            let mut parent = serde_json::Map::new();
-            parent.insert(leaf.to_string(), subtree.clone());
-
-            debug!(?leaf);
-            for level in parents {
-                debug!(?level, "level");
-                let mut next = serde_json::Map::new();
-                next.insert(level.to_string(), serde_json::Value::Object(parent));
-                parent = next;
-            }
-
-            let root = serde_json::Value::Object(parent);
-            template.data = root;
-
+            template.data = json!({});
             let dbg = serde_json::to_string_pretty(&template)?;
-            eprintln!("{}", dbg);
+            eprintln!("before: {}", dbg);
+
+            add_to_path(&mut template.data, &to_field_path, subtree.clone())?;
+            let dbg = serde_json::to_string_pretty(&template)?;
+            eprintln!("after: {}", dbg);
 
             let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
             api.patch(&target_ref.name, &ssapply, &Patch::Apply(&template))
@@ -266,8 +252,8 @@ async fn main() -> Result<()> {
 
 #[derive(thiserror::Error, Debug)]
 enum AddToPathError {
-    #[error("Value must be an object")]
-    ObjectRequired(),
+    #[error("Value for field {0} must be an object")]
+    ObjectRequired(serde_json::Value),
 }
 
 fn add_to_path(
@@ -291,14 +277,14 @@ fn add_to_path(
                 Some((field, rest)) => {
                     map = match map.entry(field).or_insert(json!({})) {
                         Object(inner_map) => inner_map,
-                        _ => return Err(AddToPathError::ObjectRequired()),
+                        _ => return Err(AddToPathError::ObjectRequired(root.clone())),
                     };
                     path = rest;
                 }
             };
         }
     } else {
-        Err(AddToPathError::ObjectRequired())
+        Err(AddToPathError::ObjectRequired(root.clone()))
     }
 }
 
