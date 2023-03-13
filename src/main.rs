@@ -222,11 +222,16 @@ async fn main() -> Result<()> {
             } else {
                 "$".to_string()
             };
-            let to_field_path = mapping.to_field_path.as_deref().unwrap_or("");
+            let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
 
-            let subtree = jsonpath_lib::select(&resource_json, &from_field_path)?;
-            assert_eq!(subtree.len(), 1);
-            let subtree = subtree[0];
+            let subtree = if let [subtree] =
+                jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice()
+            {
+                *subtree
+            } else {
+                return Err(anyhow!("JSONPath didn't produce exactly one value"));
+            };
+
             debug!(?subtree);
 
             template.data = json!({});
