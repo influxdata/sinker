@@ -3,6 +3,10 @@ name = "sinker"
 version = "0.1.0"
 license = "MIT"
 edition = "2021"
+keywords = ["kubernetes"]
+repository = "https://github.com/mkmik/sinker"
+authors = ["Marko Mikulicic <mkm@influxdata.com>"]
+description = "Copy k8s resources (or parts thereof) across clusters"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive", "help", "env", "std"] }
