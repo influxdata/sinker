@@ -238,7 +238,7 @@ async fn main() -> Result<()> {
             let dbg = serde_json::to_string_pretty(&template)?;
             eprintln!("before: {}", dbg);
 
-            add_to_path(&mut template.data, &to_field_path, subtree.clone())?;
+            add_to_path(&mut template.data, to_field_path, subtree.clone())?;
             let dbg = serde_json::to_string_pretty(&template)?;
             eprintln!("after: {}", dbg);
 
@@ -272,7 +272,7 @@ fn add_to_path(
         let mut map = map;
         let mut path = path;
         loop {
-            match path.split_once(".") {
+            match path.split_once('.') {
                 // this is the leaf field, just add it to the map and we're done.
                 None => {
                     map.insert(path.to_string(), leaf);
