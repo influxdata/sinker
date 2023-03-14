@@ -48,8 +48,9 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             .map_err(Error::KubeconfigUtf8Error)?,
     )?;
     let config = Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
-    let remote_client: kube::Client = kube::Client::try_from(config)?;
+    debug!(?config.cluster_url, "connecting to remote cluster");
 
+    let remote_client: kube::Client = kube::Client::try_from(config)?;
     let version = remote_client.apiserver_version().await?;
     debug!(?version, "remote cluster version");
 
@@ -102,11 +103,10 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             set_field_path(&mut template.data, &mapping.to_field_path, subtree.clone())?;
             let dbg = serde_json::to_string_pretty(&template)?;
             debug!(%dbg, "after");
-
-            let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
-            api.patch(&target_ref.name, &ssapply, &Patch::Apply(&template))
-                .await?;
         }
+        let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
+        api.patch(&target_ref.name, &ssapply, &Patch::Apply(&template))
+            .await?;
     }
 
     Ok(Action::requeue(Duration::from_secs(5)))

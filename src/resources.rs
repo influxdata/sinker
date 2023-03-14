@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
 #[kube(
-    group = "sinker.mkm.pub",
+    group = "sinker.influxdata.io",
     version = "v1alpha1",
     kind = "ResourceSync",
     namespaced

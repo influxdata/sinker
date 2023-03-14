@@ -1,4 +1,4 @@
-apiVersion: sinker.mkm.pub/v1alpha1
+apiVersion: sinker.influxdata.io/v1alpha1
 kind: ResourceSync
 metadata:
   name: demo
