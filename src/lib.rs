@@ -35,7 +35,5 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Expose all controller components used by main
 pub mod controller;
 
-pub use crate::controller::*;
-
 mod mapping;
 pub mod resources;
