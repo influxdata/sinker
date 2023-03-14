@@ -101,12 +101,10 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             };
             let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
 
-            let subtree = if let [subtree] =
-                jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice()
-            {
-                *subtree
-            } else {
-                return Err(Error::JSONPathExactlyOneValue);
+            let subtree = match jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice() {
+                [] => return Err(Error::JsonPathNoValues(from_field_path.to_owned())),
+                [subtree] => *subtree,
+                _ => return Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
             };
 
             debug!(?subtree);
@@ -129,7 +127,7 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
 
 fn error_policy(sinker: Arc<ResourceSync>, error: &Error, _ctx: Arc<Context>) -> Action {
     let name = sinker.name_any();
-    warn!(?name, "reconcile failed: {:?}", error);
+    warn!(?name, %error, "reconcile failed");
     Action::requeue(Duration::from_secs(5 * 60))
 }
 

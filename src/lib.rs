@@ -26,8 +26,11 @@ pub enum Error {
     #[error(transparent)]
     AddToPathError(#[from] mapping::AddToPathError),
 
-    #[error("JSONPath didn't produce exactly one value")]
-    JSONPathExactlyOneValue,
+    #[error("JSONPath '{0}' didn't produce exactly one value")]
+    JsonPathNoValues(String),
+
+    #[error("JSONPath '{0}' didn't produce exactly one value")]
+    JsonPathExactlyOneValue(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
