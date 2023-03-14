@@ -14,7 +14,7 @@ use kube::{
 };
 use serde_json::json;
 
-use crate::{mapping::add_to_path, resources::ResourceSync, Error, Result};
+use crate::{mapping::set_field_path, resources::ResourceSync, Error, Result};
 
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
@@ -98,10 +98,8 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             let dbg = serde_json::to_string_pretty(&template)?;
             debug!(%dbg, "before");
 
-            let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
             debug!(?subtree, ?mapping.to_field_path, "to field path");
-
-            add_to_path(&mut template.data, to_field_path, subtree.clone())?;
+            set_field_path(&mut template.data, &mapping.to_field_path, subtree.clone())?;
             let dbg = serde_json::to_string_pretty(&template)?;
             debug!(%dbg, "after");
 

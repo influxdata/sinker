@@ -6,7 +6,7 @@ pub enum AddToPathError {
     ObjectRequired(serde_json::Value),
 }
 
-pub(crate) fn add_to_path(
+pub(crate) fn set_field_path(
     root: &mut serde_json::Value,
     path: &str,
     leaf: serde_json::Value,
@@ -52,7 +52,7 @@ mod tests {
     )]
     fn test_add_to_path(#[case] path: &str, #[case] expected: &str) {
         let mut root = json!({ "spec": {}, "status": {"keep": 1} });
-        add_to_path(
+        set_field_path(
             &mut root,
             path,
             serde_json::Value::String("demo".to_string()),

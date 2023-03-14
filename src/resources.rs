@@ -25,7 +25,7 @@ pub struct ResourceSyncSpec {
 #[serde(rename_all = "camelCase")]
 pub struct Mapping {
     pub from_field_path: Option<String>,
-    pub to_field_path: Option<String>,
+    pub to_field_path: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
