@@ -1533,6 +1533,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures",
  "jsonpath_lib",
  "k8s-openapi",
  "kube",
