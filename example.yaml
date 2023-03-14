@@ -23,3 +23,5 @@ spec:
   mappings:
     - fromFieldPath: data.remote
       toFieldPath: data.remote
+    - fromFieldPath: data.foo
+      toFieldPath: data.bar

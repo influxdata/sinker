@@ -89,36 +89,39 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             namespace: sinker.namespace(),
             ..Default::default()
         };
-        assert_eq!(sinker.spec.mappings.len(), 1);
-        let mapping = &sinker.spec.mappings[0];
-        let resource_json = serde_json::to_value(&resource)?;
-        let from_field_path = if let Some(from_field_path) = &mapping.from_field_path {
-            format!("$.{}", from_field_path)
-        } else {
-            "$".to_string()
-        };
-        let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
 
-        let subtree =
-            if let [subtree] = jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice() {
+        template.data = json!({});
+
+        for mapping in &sinker.spec.mappings {
+            let resource_json = serde_json::to_value(&resource)?;
+            let from_field_path = if let Some(from_field_path) = &mapping.from_field_path {
+                format!("$.{}", from_field_path)
+            } else {
+                "$".to_string()
+            };
+            let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
+
+            let subtree = if let [subtree] =
+                jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice()
+            {
                 *subtree
             } else {
                 return Err(Error::JSONPathExactlyOneValue);
             };
 
-        debug!(?subtree);
+            debug!(?subtree);
 
-        template.data = json!({});
-        let dbg = serde_json::to_string_pretty(&template)?;
-        debug!(%dbg, "before");
+            let dbg = serde_json::to_string_pretty(&template)?;
+            debug!(%dbg, "before");
 
-        add_to_path(&mut template.data, to_field_path, subtree.clone())?;
-        let dbg = serde_json::to_string_pretty(&template)?;
-        debug!(%dbg, "after");
+            add_to_path(&mut template.data, to_field_path, subtree.clone())?;
+            let dbg = serde_json::to_string_pretty(&template)?;
+            debug!(%dbg, "after");
 
-        let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
-        api.patch(&target_ref.name, &ssapply, &Patch::Apply(&template))
-            .await?;
+            let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
+            api.patch(&target_ref.name, &ssapply, &Patch::Apply(&template))
+                .await?;
+        }
     }
 
     Ok(Action::requeue(Duration::from_secs(5)))
