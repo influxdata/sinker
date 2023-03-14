@@ -89,28 +89,17 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             namespace: sinker.namespace(),
             ..Default::default()
         };
-
         template.data = json!({});
 
         for mapping in &sinker.spec.mappings {
-            let resource_json = serde_json::to_value(&resource)?;
-            let from_field_path = if let Some(from_field_path) = &mapping.from_field_path {
-                format!("$.{}", from_field_path)
-            } else {
-                "$".to_string()
-            };
-            let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
-
-            let subtree = match jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice() {
-                [] => return Err(Error::JsonPathNoValues(from_field_path.to_owned())),
-                [subtree] => *subtree,
-                _ => return Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
-            };
-
-            debug!(?subtree);
+            let subtree = find_field_path(&resource, &mapping.from_field_path)?;
+            debug!(?subtree, ?mapping.from_field_path, "from field path");
 
             let dbg = serde_json::to_string_pretty(&template)?;
             debug!(%dbg, "before");
+
+            let to_field_path = mapping.to_field_path.as_deref().unwrap_or_default();
+            debug!(?subtree, ?mapping.to_field_path, "to field path");
 
             add_to_path(&mut template.data, to_field_path, subtree.clone())?;
             let dbg = serde_json::to_string_pretty(&template)?;
@@ -147,6 +136,23 @@ pub async fn run(client: Client) -> Result<()> {
         .await;
 
     Ok(())
+}
+
+fn find_field_path<T>(resource: T, from_field_path: &Option<String>) -> Result<serde_json::Value>
+where
+    T: serde::Serialize,
+{
+    let resource_json = serde_json::to_value(&resource)?;
+    let from_field_path = if let Some(from_field_path) = from_field_path {
+        format!("$.{}", from_field_path)
+    } else {
+        "$".to_string()
+    };
+    match jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice() {
+        [] => Err(Error::JsonPathNoValues(from_field_path.to_owned())),
+        [&ref subtree] => Ok(subtree.to_owned()),
+        _ => Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
+    }
 }
 
 /// Applies the CRD to the k8s cluster.
