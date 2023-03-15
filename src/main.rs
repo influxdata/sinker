@@ -25,14 +25,11 @@ async fn main() -> anyhow::Result<()> {
         admin: kubert::AdminArgs,
 
         #[command(subcommand)]
-        command: Commands,
+        command: Option<Commands>,
     }
 
     #[derive(Clone, Subcommand)]
     enum Commands {
-        /// Run the controller
-        Run,
-
         /// Generates k8s manifests
         Manifests,
     }
@@ -46,13 +43,13 @@ async fn main() -> anyhow::Result<()> {
     } = Args::parse();
 
     match &command {
-        Commands::Manifests => {
+        Some(Commands::Manifests) => {
             println!(
                 "{}",
                 serde_yaml::to_string(&sinker::resources::ResourceSync::crd()).unwrap()
             );
         }
-        Commands::Run => {
+        None => {
             let rt = kubert::Runtime::builder()
                 .with_log(log_level, log_format)
                 .with_admin(admin)
