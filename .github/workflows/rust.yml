@@ -25,7 +25,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: install nixpacks
         run: curl -sSL https://nixpacks.com/install.sh | bash
       - name: nixpacks build
-        run: nixpacks build . -n sinker
+        run: nixpacks build . -n ghcr.io/mkmik/sinker
+      - name: push docker image
+        run: docker push ghcr.io/mkmik/sinker
