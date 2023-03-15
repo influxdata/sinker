@@ -37,3 +37,4 @@ jobs:
         run: nixpacks build . -n ghcr.io/mkmik/sinker
       - name: push docker image
         run: docker push ghcr.io/mkmik/sinker
+        if: github.event_name != 'pull_request'
