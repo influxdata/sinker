@@ -15,12 +15,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      - name: Build
+        run: cargo build
       - name: Generate
         run: cargo run -- manifests > manifests/crd.yml
       - name: Diff
         run: test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
-      - name: Build
-        run: cargo build
       - name: Run tests
         run: cargo test
 
