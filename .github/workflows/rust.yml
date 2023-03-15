@@ -10,6 +10,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  manifests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate
+        run: cargo run -- manifests
+      - name: Diff
+        run: test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
+
   build:
     runs-on: ubuntu-latest
 
