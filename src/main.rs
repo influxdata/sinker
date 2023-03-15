@@ -1,8 +1,5 @@
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::bare_urls, rust_2018_idioms)]
 
-use std::fs::File;
-use std::io::Write;
-
 use clap::{Parser, Subcommand};
 use kube::CustomResourceExt;
 
@@ -33,6 +30,9 @@ async fn main() -> anyhow::Result<()> {
 
     #[derive(Clone, Subcommand)]
     enum Commands {
+        /// Run the controller
+        Run,
+
         /// Generates k8s manifests
         Manifests,
     }
@@ -45,22 +45,26 @@ async fn main() -> anyhow::Result<()> {
         command,
     } = Args::parse();
 
-    if matches!(&command, Commands::Manifests) {
-        let yaml = serde_yaml::to_string(&sinker::resources::ResourceSync::crd())?;
-        let mut output = File::create("manifests/crd.yml")?;
-        write!(output, "{}", yaml)?
-    } else {
-        let rt = kubert::Runtime::builder()
-            .with_log(log_level, log_format)
-            .with_admin(admin)
-            .with_client(client)
-            .build()
-            .await?;
+    match &command {
+        Commands::Manifests => {
+            println!(
+                "{}",
+                serde_yaml::to_string(&sinker::resources::ResourceSync::crd()).unwrap()
+            );
+        }
+        Commands::Run => {
+            let rt = kubert::Runtime::builder()
+                .with_log(log_level, log_format)
+                .with_admin(admin)
+                .with_client(client)
+                .build()
+                .await?;
 
-        let controller = controller::run(rt.client());
+            let controller = controller::run(rt.client());
 
-        // Both runtimes implements graceful shutdown, so poll until both are done
-        tokio::join!(controller, rt.run()).1?;
+            // Both runtimes implements graceful shutdown, so poll until both are done
+            tokio::join!(controller, rt.run()).1?;
+        }
     }
 
     Ok(())
