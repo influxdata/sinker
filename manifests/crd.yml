@@ -36,6 +36,7 @@ spec:
                 source:
                   properties:
                     cluster:
+                      description: "A missing clusterRef means \"this (local) cluster\" and the namespace where resourceRef will be searched in is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets in a namespace they don't have rights to by leveraging sinker.\n\nIf a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters. RBAC is still honoured because sinker can only access resources for which the provided token has rights to."
                       nullable: true
                       properties:
                         kubeConfig:
@@ -54,12 +55,14 @@ spec:
                             - secretRef
                           type: object
                         namespace:
+                          description: "If present, overrides the default namespace defined in the provided kubeConfig"
                           nullable: true
                           type: string
                       required:
                         - kubeConfig
                       type: object
                     resourceRef:
+                      description: "This is a reference to a resource that lives in the cluster specified by the sister cluster field. The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the cluster reference."
                       properties:
                         apiVersion:
                           type: string
@@ -78,6 +81,7 @@ spec:
                 target:
                   properties:
                     cluster:
+                      description: "A missing clusterRef means \"this (local) cluster\" and the namespace where resourceRef will be searched in is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets in a namespace they don't have rights to by leveraging sinker.\n\nIf a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters. RBAC is still honoured because sinker can only access resources for which the provided token has rights to."
                       nullable: true
                       properties:
                         kubeConfig:
@@ -96,12 +100,14 @@ spec:
                             - secretRef
                           type: object
                         namespace:
+                          description: "If present, overrides the default namespace defined in the provided kubeConfig"
                           nullable: true
                           type: string
                       required:
                         - kubeConfig
                       type: object
                     resourceRef:
+                      description: "This is a reference to a resource that lives in the cluster specified by the sister cluster field. The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the cluster reference."
                       properties:
                         apiVersion:
                           type: string

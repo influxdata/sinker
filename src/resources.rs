@@ -37,20 +37,31 @@ pub struct ResourceSyncStatus {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterResourceRef {
-    pub resource_ref: ResourceRef,
+    /// This is a reference to a resource that lives in the cluster specified by the sister cluster field.
+    /// The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the
+    /// cluster reference.
+    pub resource_ref: GVKN,
+    /// A missing clusterRef means "this (local) cluster" and the namespace where resourceRef will be searched in
+    /// is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets
+    /// in a namespace they don't have rights to by leveraging sinker.
+    ///
+    /// If a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters.
+    /// RBAC is still honoured because sinker can only access resources for which the provided token has rights to.
     pub cluster: Option<ClusterRef>,
 }
 
+/// This is a GVKN (apiVersion + kind + name) reference to a resource.
+/// The namespace is given by the context where this reference belongs to.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ResourceRef {
+pub struct GVKN {
     pub api_version: String,
     pub kind: String,
     pub name: String,
 }
 
-impl From<&ResourceRef> for TypeMeta {
-    fn from(value: &ResourceRef) -> Self {
+impl From<&GVKN> for TypeMeta {
+    fn from(value: &GVKN) -> Self {
         TypeMeta {
             api_version: value.api_version.clone(),
             kind: value.kind.clone(),
@@ -58,10 +69,10 @@ impl From<&ResourceRef> for TypeMeta {
     }
 }
 
-impl TryFrom<&ResourceRef> for GroupVersionKind {
+impl TryFrom<&GVKN> for GroupVersionKind {
     type Error = ParseGroupVersionError;
 
-    fn try_from(value: &ResourceRef) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &GVKN) -> std::result::Result<Self, Self::Error> {
         let type_meta: TypeMeta = value.into();
         type_meta.try_into()
     }
@@ -70,6 +81,7 @@ impl TryFrom<&ResourceRef> for GroupVersionKind {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRef {
+    /// If present, overrides the default namespace defined in the provided kubeConfig
     pub namespace: Option<String>,
     pub kube_config: KubeConfig,
 }
