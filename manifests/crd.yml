@@ -1,0 +1,140 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: resourcesyncs.sinker.influxdata.io
+spec:
+  group: sinker.influxdata.io
+  names:
+    categories: []
+    kind: ResourceSync
+    plural: resourcesyncs
+    shortNames: []
+    singular: resourcesync
+  scope: Namespaced
+  versions:
+    - additionalPrinterColumns: []
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: "Auto-generated derived type for ResourceSyncSpec via `CustomResource`"
+          properties:
+            spec:
+              properties:
+                mappings:
+                  items:
+                    properties:
+                      fromFieldPath:
+                        nullable: true
+                        type: string
+                      toFieldPath:
+                        type: string
+                    required:
+                      - toFieldPath
+                    type: object
+                  type: array
+                source:
+                  properties:
+                    cluster:
+                      nullable: true
+                      properties:
+                        kubeConfig:
+                          properties:
+                            secretRef:
+                              properties:
+                                key:
+                                  type: string
+                                name:
+                                  type: string
+                              required:
+                                - key
+                                - name
+                              type: object
+                          required:
+                            - secretRef
+                          type: object
+                        namespace:
+                          nullable: true
+                          type: string
+                      required:
+                        - kubeConfig
+                      type: object
+                    resourceRef:
+                      properties:
+                        apiVersion:
+                          type: string
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                      required:
+                        - apiVersion
+                        - kind
+                        - name
+                      type: object
+                  required:
+                    - resourceRef
+                  type: object
+                target:
+                  properties:
+                    cluster:
+                      nullable: true
+                      properties:
+                        kubeConfig:
+                          properties:
+                            secretRef:
+                              properties:
+                                key:
+                                  type: string
+                                name:
+                                  type: string
+                              required:
+                                - key
+                                - name
+                              type: object
+                          required:
+                            - secretRef
+                          type: object
+                        namespace:
+                          nullable: true
+                          type: string
+                      required:
+                        - kubeConfig
+                      type: object
+                    resourceRef:
+                      properties:
+                        apiVersion:
+                          type: string
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                      required:
+                        - apiVersion
+                        - kind
+                        - name
+                      type: object
+                  required:
+                    - resourceRef
+                  type: object
+              required:
+                - source
+                - target
+              type: object
+            status:
+              nullable: true
+              properties:
+                demo:
+                  type: string
+              required:
+                - demo
+              type: object
+          required:
+            - spec
+          title: ResourceSync
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}
+
