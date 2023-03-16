@@ -11,9 +11,9 @@ description = "Copy k8s resources (or parts thereof) across clusters"
 [dependencies]
 clap = { version = "4.1", features = ["derive", "help", "env", "std"] }
 futures = "0.3"
-kube = { version = "0.78.0", features = ["runtime", "derive"] }
+kube = { version = "0.80.0", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.17.0", features = ["v1_26"] }
-kubert = { version = "0.13.0", features = ["clap", "runtime", "server"] }
+kubert = { version = "0.15.0", features = ["clap", "runtime", "server"] }
 tokio = { version = "1.26", features = ["full"] }
 anyhow = { version = "1", features = ["backtrace"] } 
 tracing = "0.1"
