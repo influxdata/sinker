@@ -37,9 +37,9 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
 
     let namespace = cluster_ref
         .and_then(|cluster_ref| cluster_ref.namespace.as_deref())
-        .or(sinker_ns.as_deref())
         .ok_or(Error::NamespaceRequired)?;
-    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), sinker_ns.as_deref().unwrap());
 
     let sec = secrets.get(&secret_ref.name).await?;
 
