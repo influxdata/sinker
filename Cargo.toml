@@ -4,7 +4,7 @@ version = "0.1.0"
 license = "MIT"
 edition = "2021"
 keywords = ["kubernetes"]
-repository = "https://github.com/mkmik/sinker"
+repository = "https://github.com/influxdata/sinker"
 authors = ["Marko Mikulicic <mkm@influxdata.com>"]
 description = "Copy k8s resources (or parts thereof) across clusters"
 
