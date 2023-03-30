@@ -1,16 +1,13 @@
 use futures::StreamExt;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use k8s_openapi::{
-    api::core::v1::Secret,
-    apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
-};
+use k8s_openapi::api::core::v1::Secret;
 use kube::{
     api::{ListParams, Patch, PatchParams},
     core::DynamicObject,
     discovery::{self, ApiResource},
     runtime::controller::{Action, Controller},
-    Api, Client, Config, CustomResourceExt, Resource, ResourceExt,
+    Api, Client, Config, Resource, ResourceExt,
 };
 use serde_json::json;
 
@@ -179,8 +176,6 @@ fn cleanup_annotations(mut annotations: BTreeMap<String, String>) -> BTreeMap<St
 }
 
 pub async fn run(client: Client) -> Result<()> {
-    apply_crd(client.clone()).await?;
-
     let docs = Api::<ResourceSync>::all(client.clone());
     if let Err(e) = docs.list(&ListParams::default().limit(1)).await {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
@@ -211,20 +206,4 @@ where
         [subtree] => Ok((*subtree).clone()),
         _ => Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
     }
-}
-
-/// Applies the CRD to the k8s cluster.
-async fn apply_crd(client: Client) -> Result<()> {
-    let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
-
-    let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
-    crds.patch(
-        &ResourceSync::crd().metadata.name.unwrap(),
-        &ssapply,
-        &Patch::Apply(ResourceSync::crd()),
-    )
-    .await?;
-
-    debug!("CRD applied");
-    Ok(())
 }
