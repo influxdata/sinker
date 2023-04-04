@@ -101,6 +101,7 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
 
     let target_ref = &sinker.spec.target.resource_ref;
     let (api, ar) = api_for(&sinker.spec.target, &local_ns, Arc::clone(&ctx)).await?;
+    debug!("got client for target");
 
     let target = if sinker.spec.mappings.is_empty() {
         clone_resource(&source, target_ref, &sinker, &ar)?
