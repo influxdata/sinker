@@ -107,10 +107,12 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
     } else {
         apply_mappings(&source, target_ref, &sinker, &ar)?
     };
+    debug!(?target, "produced target object");
 
     let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
     api.patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
+    debug!("patched target resource");
 
     // TODO(mkm): make requeue duration configurable
     Ok(Action::requeue(Duration::from_secs(5)))
