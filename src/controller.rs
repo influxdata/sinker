@@ -75,14 +75,19 @@ async fn api_for(
 ) -> Result<(Api<DynamicObject>, ApiResource)> {
     let cluster_ref = cluster_resource_ref.cluster.as_ref();
     let client = cluster_client(cluster_ref, local_ns, ctx).await?;
-    let namespace = cluster_ref.and_then(|cluster_ref| cluster_ref.namespace.as_deref());
 
     let resource_ref = &cluster_resource_ref.resource_ref;
     let (ar, _) = discovery::pinned_kind(&client, &resource_ref.try_into()?).await?;
 
-    let api = match namespace {
-        Some(namespace) => Api::namespaced_with(client.clone(), namespace, &ar),
-        None => Api::default_namespaced_with(client.clone(), &ar),
+    // if cluster_ref is a remote cluster and we don't specify a namespace in
+    // the config, use the default for that client.
+    // if cluster_ref is local, use local_ns.
+    let api = match cluster_ref {
+        Some(cluster) => match &cluster.namespace {
+            Some(namespace) => Api::namespaced_with(client.clone(), namespace, &ar),
+            None => Api::default_namespaced_with(client.clone(), &ar),
+        },
+        None => Api::namespaced_with(client.clone(), local_ns, &ar),
     };
 
     Ok((api, ar))
@@ -113,7 +118,8 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
     let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
     api.patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
-    debug!("patched target resource");
+
+    info!(?name, ?target_ref, "successfully reconciled");
 
     // TODO(mkm): make requeue duration configurable
     Ok(Action::requeue(Duration::from_secs(5)))
