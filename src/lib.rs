@@ -26,7 +26,7 @@ pub enum Error {
     #[error(transparent)]
     AddToPathError(#[from] mapping::AddToPathError),
 
-    #[error("JSONPath '{0}' didn't produce exactly one value")]
+    #[error("JSONPath '{0}' propduced no values")]
     JsonPathNoValues(String),
 
     #[error("JSONPath '{0}' didn't produce exactly one value")]
