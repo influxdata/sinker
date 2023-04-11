@@ -211,7 +211,7 @@ where
         "$".to_string()
     };
     match jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice() {
-        [] => Err(Error::JsonPathNoValues(from_field_path.to_owned())),
+        [] => Ok(json!(null)),
         [subtree] => Ok((*subtree).clone()),
         _ => Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
     }
