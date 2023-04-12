@@ -165,7 +165,20 @@ fn apply_mappings(
         debug!(%dbg, "before");
 
         debug!(?subtree, ?mapping.to_field_path, "to field path");
-        set_field_path(&mut template.data, &mapping.to_field_path, subtree.clone())?;
+        if mapping.to_field_path.starts_with("metadata.") {
+            // DynamicObject's metadata is not a serde_json::value::Value,
+            // but we can convert to/from that and use the same code to update
+            // it as we do for spec/status in .data
+            let mut metadata = serde_json::value::to_value(template.metadata.clone())?;
+            set_field_path(
+                &mut metadata,
+                &mapping.to_field_path.strip_prefix("metadata.").unwrap(),
+                subtree.clone(),
+            )?;
+            template.metadata = serde_json::value::from_value(metadata)?;
+        } else {
+            set_field_path(&mut template.data, &mapping.to_field_path, subtree.clone())?;
+        }
         let dbg = serde_json::to_string_pretty(&template)?;
         debug!(%dbg, "after");
     }
