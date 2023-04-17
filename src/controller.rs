@@ -68,11 +68,19 @@ async fn cluster_client(
     Ok(client)
 }
 
+/// An `Api` struct already contains the namespace but it doesn't expose an accessor for it.
+/// This struct preserves a copy of the namespace we pass to the `Api` constructor when we create it.
+struct NamespacedApi {
+    api: Api<DynamicObject>,
+    ar: ApiResource,
+    namespace: String,
+}
+
 async fn api_for(
     cluster_resource_ref: &ClusterResourceRef,
     local_ns: &str,
     ctx: Arc<Context>,
-) -> Result<(Api<DynamicObject>, ApiResource)> {
+) -> Result<NamespacedApi> {
     let cluster_ref = cluster_resource_ref.cluster.as_ref();
     let client = cluster_client(cluster_ref, local_ns, ctx).await?;
 
@@ -82,15 +90,24 @@ async fn api_for(
     // if cluster_ref is a remote cluster and we don't specify a namespace in
     // the config, use the default for that client.
     // if cluster_ref is local, use local_ns.
-    let api = match cluster_ref {
+    let (api, namespace) = match cluster_ref {
         Some(cluster) => match &cluster.namespace {
-            Some(namespace) => Api::namespaced_with(client.clone(), namespace, &ar),
-            None => Api::default_namespaced_with(client.clone(), &ar),
+            Some(namespace) => (
+                Api::namespaced_with(client.clone(), namespace, &ar),
+                namespace.to_owned(),
+            ),
+            None => (
+                Api::default_namespaced_with(client.clone(), &ar),
+                client.default_namespace().to_owned(),
+            ),
         },
-        None => Api::namespaced_with(client.clone(), local_ns, &ar),
+        None => (
+            Api::namespaced_with(client.clone(), local_ns, &ar),
+            local_ns.to_owned(),
+        ),
     };
 
-    Ok((api, ar))
+    Ok(NamespacedApi { api, ar, namespace })
 }
 
 async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
@@ -100,18 +117,24 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
     debug!(?sinker.spec, "got");
     let local_ns = sinker.namespace().ok_or(Error::NamespaceRequired)?;
 
-    let (api, _) = api_for(&sinker.spec.source, &local_ns, Arc::clone(&ctx)).await?;
+    let NamespacedApi { api, .. } =
+        api_for(&sinker.spec.source, &local_ns, Arc::clone(&ctx)).await?;
     let source = api.get(&sinker.spec.source.resource_ref.name).await?;
     debug!(?source, "got source object");
 
     let target_ref = &sinker.spec.target.resource_ref;
-    let (api, ar) = api_for(&sinker.spec.target, &local_ns, Arc::clone(&ctx)).await?;
-    debug!("got client for target");
+    let NamespacedApi {
+        api,
+        ar,
+        namespace: target_namespace,
+    } = api_for(&sinker.spec.target, &local_ns, Arc::clone(&ctx)).await?;
+
+    debug!(%target_namespace, "got client for target");
 
     let target = if sinker.spec.mappings.is_empty() {
-        clone_resource(&source, target_ref, &sinker, &ar)?
+        clone_resource(&source, target_ref, &target_namespace, &ar)?
     } else {
-        apply_mappings(&source, target_ref, &sinker, &ar)?
+        apply_mappings(&source, target_ref, &target_namespace, &ar, &sinker)?
     };
     debug!(?target, "produced target object");
 
@@ -129,13 +152,11 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
 fn clone_resource(
     source: &DynamicObject,
     target_ref: &GVKN,
-    sinker: &ResourceSync,
+    target_namespace: &str,
     ar: &ApiResource,
 ) -> Result<DynamicObject> {
-    let local_ns = sinker.namespace().ok_or(Error::NamespaceRequired)?;
-
     let mut target = DynamicObject::new(&target_ref.name, ar)
-        .within(&local_ns)
+        .within(target_namespace)
         .data(source.data.clone());
 
     target.metadata.annotations = source.metadata.annotations.clone().map(cleanup_annotations);
@@ -148,13 +169,12 @@ fn clone_resource(
 fn apply_mappings(
     source: &DynamicObject,
     target_ref: &GVKN,
-    sinker: &ResourceSync,
+    target_namespace: &str,
     ar: &ApiResource,
+    sinker: &ResourceSync,
 ) -> Result<DynamicObject> {
-    let local_ns = sinker.namespace().ok_or(Error::NamespaceRequired)?;
-
     let mut template = DynamicObject::new(&target_ref.name, ar)
-        .within(&local_ns)
+        .within(target_namespace)
         .data(json!({}));
 
     for mapping in &sinker.spec.mappings {
