@@ -39,9 +39,9 @@ jobs:
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
 
-      - run: |
-        echo GITHUB_SHA
-        "IMAGE_TAG=$(git rev-parse HEAD) >> $GITHUB_ENV
+      # - run: |
+      #   echo GITHUB_SHA
+      #   "IMAGE_TAG=$(git rev-parse HEAD) >> $GITHUB_ENV
 
       - name: Build
         uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671 # v4
