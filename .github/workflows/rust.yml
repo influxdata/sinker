@@ -40,7 +40,7 @@ jobs:
           password: ${{ secrets.GAR_JSON_KEY }}
 
       - run: |  
-          echo "LAST_COMMIT_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
+          echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
           printenv
 
       - name: Build
