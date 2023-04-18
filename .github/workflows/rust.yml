@@ -54,4 +54,4 @@ jobs:
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.GITHUB_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-       if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request'
