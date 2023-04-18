@@ -38,12 +38,17 @@ jobs:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
+
+      - run: |
+        echo GITHUB_SHA
+        "IMAGE_TAG=$(git rev-parse HEAD) >> $GITHUB_ENV
+
       - name: Build
         uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671 # v4
         with:
           context: .
           push: false
-          tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.GITHUB_SHA }}
+          tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${GITHUB_SHA}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Push
