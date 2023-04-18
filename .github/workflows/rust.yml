@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: ["main", modify-sinker-to-push-to-GA]   
+    branches: ["main"]   
   pull_request:
     branches: ["main"]
 
@@ -59,4 +59,4 @@ jobs:
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-        # if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request'
