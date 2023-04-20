@@ -209,7 +209,7 @@ fn error_policy(sinker: Arc<ResourceSync>, error: &Error, _ctx: Arc<Context>) ->
     let name = sinker.name_any();
     warn!(?name, %error, "reconcile failed");
     // TODO(mkm): make error requeue duration configurable
-    Action::requeue(Duration::from_secs(5 * 60))
+    Action::requeue(Duration::from_secs(5))
 }
 
 fn cleanup_annotations(mut annotations: BTreeMap<String, String>) -> BTreeMap<String, String> {
