@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: ["main"]   
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
@@ -38,8 +38,9 @@ jobs:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
+        if: github.event_name != 'pull_request'
 
-      - run: |  
+      - run: |
           echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
       - name: Build
