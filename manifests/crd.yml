@@ -148,4 +148,35 @@ spec:
     storage: true
     subresources:
       status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sinkercontainers.sinker.influxdata.io
+spec:
+  group: sinker.influxdata.io
+  names:
+    categories: []
+    kind: SinkerContainer
+    plural: sinkercontainers
+    shortNames: []
+    singular: sinkercontainer
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns: []
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: This is a handy generic resource container for use as ResourceSync sources or targets
+        properties:
+          spec:
+            description: This is an arbitrary object
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}
 
