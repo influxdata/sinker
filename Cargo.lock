@@ -1583,6 +1583,7 @@ dependencies = [
  "jsonpath_lib",
  "k8s-openapi",
  "kube",
+ "kube-derive",
  "kubert",
  "rstest",
  "schemars",
