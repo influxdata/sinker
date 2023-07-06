@@ -18,6 +18,10 @@ jobs:
       - uses: Swatinem/rust-cache@6fd3edff6979b79f87531400ad694fb7f2c84b1f # v2
       - name: Build
         run: cargo build
+      - name: Format
+        run: |
+          cargo fmt
+          test -z "$(git status --porcelain)" || (echo 'Changes detected after running cargo fmt'; git status; git --no-pager diff; false)
       - name: Generate
         run: cargo run -- manifests > manifests/crd.yml
       - name: Diff
