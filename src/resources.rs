@@ -111,8 +111,7 @@ pub struct SecretRef {
     schema = "disabled"
 )]
 #[serde(rename_all = "camelCase")]
-pub struct SinkerContainerSpec {
-}
+pub struct SinkerContainerSpec {}
 
 const MANUAL_SCHEMA: &str = r#"
 description: This is a handy generic resource container for use as ResourceSync sources or targets
@@ -127,7 +126,7 @@ required:
 "#;
 
 impl SinkerContainer {
-     pub fn crd_with_manual_schema() -> CustomResourceDefinition {
+    pub fn crd_with_manual_schema() -> CustomResourceDefinition {
         use kube::CustomResourceExt;
         let schema: JSONSchemaProps = serde_yaml::from_str(MANUAL_SCHEMA).expect("invalid schema");
 
