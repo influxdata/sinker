@@ -126,7 +126,7 @@ required:
 "#;
 
 impl SinkerContainer {
-    pub fn crd_with_manual_schema() -> CustomResourceDefinition {
+pub fn crd_with_manual_schema() -> CustomResourceDefinition {
         use kube::CustomResourceExt;
         let schema: JSONSchemaProps = serde_yaml::from_str(MANUAL_SCHEMA).expect("invalid schema");
 
