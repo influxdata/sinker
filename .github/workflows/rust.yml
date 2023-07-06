@@ -23,9 +23,9 @@ jobs:
           cargo fmt
           test -z "$(git status --porcelain)" || (echo 'Changes detected after running cargo fmt'; git status; git --no-pager diff; false)
       - name: Generate
-        run: cargo run -- manifests > manifests/crd.yml
-      - name: Diff
-        run: test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
+        run: |
+          cargo run -- manifests > manifests/crd.yml
+          test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
       - name: Run tests
         run: cargo test
 
