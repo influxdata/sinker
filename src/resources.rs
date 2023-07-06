@@ -1,3 +1,6 @@
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::{
+    CustomResourceDefinition, CustomResourceValidation, JSONSchemaProps,
+};
 use kube::{
     core::{gvk::ParseGroupVersionError, GroupVersionKind, TypeMeta},
     CustomResource,
@@ -97,4 +100,42 @@ pub struct KubeConfig {
 pub struct SecretRef {
     pub name: String,
     pub key: String,
+}
+
+#[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
+#[kube(
+    group = "sinker.influxdata.io",
+    version = "v1alpha1",
+    kind = "SinkerContainer",
+    namespaced,
+    schema = "disabled"
+)]
+#[serde(rename_all = "camelCase")]
+pub struct SinkerContainerSpec {}
+
+const MANUAL_SCHEMA: &str = r#"
+description: This is a handy generic resource container for use as ResourceSync sources or targets
+type: object
+properties:
+  spec:
+    description: This is an arbitrary object
+    type: object
+    x-kubernetes-preserve-unknown-fields: true
+required:
+- spec
+"#;
+
+impl SinkerContainer {
+    pub fn crd_with_manual_schema() -> CustomResourceDefinition {
+        use kube::CustomResourceExt;
+        let schema: JSONSchemaProps = serde_yaml::from_str(MANUAL_SCHEMA).expect("invalid schema");
+
+        let mut crd = <Self as CustomResourceExt>::crd();
+        crd.spec.versions.iter_mut().for_each(|v| {
+            v.schema = Some(CustomResourceValidation {
+                open_api_v3_schema: Some(schema.clone()),
+            })
+        });
+        crd
+    }
 }
