@@ -239,7 +239,11 @@ where
 {
     let resource_json = serde_json::to_value(&resource)?;
     let from_field_path = if let Some(from_field_path) = from_field_path {
-        format!("$.{}", from_field_path)
+        if from_field_path.len() == 0 {
+            "$".to_string()
+        } else {
+            format!("$.{}", from_field_path)
+        }
     } else {
         "$".to_string()
     };
