@@ -271,14 +271,14 @@ fn get_ar_from_subtree(subtree: &serde_json::Value) -> Result<ApiResource> {
         ))?;
     // account for group-less resources by extracting version from the end first,
     // then group if there is a term remaining.
-    let mut gv_terms = api_version.split("/").collect::<Vec<_>>();
+    let mut gv_terms = api_version.split('/').rev();
     let version = gv_terms
-        .pop()
+        .next()
         .ok_or(Error::MalformedInnerResource(
             "failed to parse apiVersion".to_string(),
         ))?
         .to_string();
-    let group = gv_terms.pop().unwrap_or("").to_string();
+    let group = gv_terms.next().unwrap_or("").to_string();
     let kind = subtree["kind"]
         .as_str()
         .ok_or(Error::MalformedInnerResource(
