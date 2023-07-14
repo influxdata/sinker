@@ -27,8 +27,10 @@ pub struct ResourceSyncSpec {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Mapping {
+    /// If `None` then to_field_path cannot be `None`.
     pub from_field_path: Option<String>,
-    pub to_field_path: String,
+    /// If `None` then from_field_path cannot be `None`.
+    pub to_field_path: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]

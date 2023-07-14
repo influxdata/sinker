@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::{
     mapping::set_field_path,
-    resources::{ClusterRef, ClusterResourceRef, ResourceSync, GVKN},
+    resources::{ClusterRef, ClusterResourceRef, Mapping, ResourceSync, GVKN},
     Error, Result,
 };
 
@@ -185,35 +185,54 @@ fn apply_mappings(
         debug!(%dbg, "before");
 
         debug!(?subtree, ?mapping.to_field_path, "to field path");
-        if mapping.to_field_path.starts_with("metadata.") {
-            // DynamicObject's metadata is not a serde_json::value::Value,
-            // but we can convert to/from that and use the same code to update
-            // it as we do for spec/status in .data
-            let mut metadata = serde_json::value::to_value(template.metadata.clone())?;
-            set_field_path(
-                &mut metadata,
-                &mapping.to_field_path.strip_prefix("metadata.").unwrap(),
-                subtree.clone(),
-            )?;
-            template.metadata = serde_json::value::from_value(metadata)?;
-        } else if mapping.to_field_path.is_empty() {
-            // this is like a clone_resource but the source is a subtree not the whole object.
-            // likely copying the inner resource of a SinkerContainer into root.
-            // we need to convert `subtree` into a DynamicObject that will work with our
-            // existing `clone_resource` function, taking care to preserve the metadata
-            // and not produce duplicate fields.
-            let ar = get_ar_from_subtree(&subtree)?;
-            let source_metadata = convert_metadata(&subtree["metadata"]);
-            let mut subtree = subtree.clone();
-            cleanup_subtree(&mut subtree);
-            let mut source = DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
-                .within(&subtree["metadata"]["namespace"].to_string())
-                .data(subtree);
-            source.metadata.annotations = source_metadata.annotations;
-            source.metadata.labels = source_metadata.labels;
-            template = clone_resource(&source, target_ref, &target_namespace, &ar)?;
-        } else {
-            set_field_path(&mut template.data, &mapping.to_field_path, subtree.clone())?;
+        match mapping {
+            Mapping {
+                from_field_path: None,
+                to_field_path: None,
+            } => {
+                // user must specify either from, to or both, but not neither.
+                // leave the mapping array empty if that's what they want.
+                return Err(Error::MappingEmpty);
+            }
+            Mapping {
+                from_field_path: Some(_),
+                to_field_path: None,
+            } => {
+                // this is like a clone_resource but the source is a subtree not the whole object.
+                // likely copying the inner resource of a SinkerContainer into root.
+                // we need to convert `subtree` into a DynamicObject that will work with our
+                // existing `clone_resource` function, taking care to preserve the metadata
+                // and not produce duplicate fields.
+                let ar = get_ar_from_subtree(&subtree)?;
+                let source_metadata = convert_metadata(&subtree["metadata"]);
+                let mut subtree = subtree.clone();
+                cleanup_subtree(&mut subtree);
+                let mut source = DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
+                    .within(&subtree["metadata"]["namespace"].to_string())
+                    .data(subtree);
+                source.metadata.annotations = source_metadata.annotations;
+                source.metadata.labels = source_metadata.labels;
+                template = clone_resource(&source, target_ref, &target_namespace, &ar)?;
+            }
+            Mapping {
+                from_field_path: _,
+                to_field_path: Some(to_field_path),
+            } => {
+                if to_field_path.starts_with("metadata.") {
+                    // DynamicObject's metadata is not a serde_json::value::Value,
+                    // but we can convert to/from that and use the same code to update
+                    // it as we do for spec/status in .data
+                    let mut metadata = serde_json::value::to_value(template.metadata.clone())?;
+                    set_field_path(
+                        &mut metadata,
+                        &to_field_path.strip_prefix("metadata.").unwrap(),
+                        subtree.clone(),
+                    )?;
+                    template.metadata = serde_json::value::from_value(metadata)?;
+                } else {
+                    set_field_path(&mut template.data, &to_field_path, subtree.clone())?;
+                }
+            }
         }
         let dbg = serde_json::to_string_pretty(&template)?;
         debug!(%dbg, "after");
@@ -433,7 +452,7 @@ mod tests {
             ResourceSyncSpec {
                 mappings: vec![Mapping {
                     from_field_path: Some("spec.subtree1".to_string()),
-                    to_field_path: "spec.subtree2".to_string(),
+                    to_field_path: Some("spec.subtree2".to_string()),
                 }],
                 source: ClusterResourceRef {
                     resource_ref: GVKN {
@@ -507,11 +526,11 @@ mod tests {
                 mappings: vec![
                     Mapping {
                         from_field_path: Some("spec.subtree1".to_string()),
-                        to_field_path: "spec.subtree2".to_string(),
+                        to_field_path: Some("spec.subtree2".to_string()),
                     },
                     Mapping {
                         from_field_path: Some("metadata.labels".to_string()),
-                        to_field_path: "metadata.labels".to_string(),
+                        to_field_path: Some("metadata.labels".to_string()),
                     },
                 ],
                 source: ClusterResourceRef {
@@ -589,7 +608,7 @@ mod tests {
             ResourceSyncSpec {
                 mappings: vec![Mapping {
                     from_field_path: Some("spec".to_string()),
-                    to_field_path: "".to_string(),
+                    to_field_path: None,
                 }],
                 source: ClusterResourceRef {
                     resource_ref: GVKN {
