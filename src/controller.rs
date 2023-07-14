@@ -365,12 +365,7 @@ mod tests {
             "kind": "SinkerContainer",
             "metadata": { "name": "test-sinker-container" },
             "spec": {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": { "name": "test-config-map-1" },
-                "data": {
-                    "dummykey": "dummyvalue",
-                },
+                "dummykey": "dummyvalue",
             },
         });
         let ar = get_ar_from_subtree(subtree).unwrap();
@@ -378,6 +373,23 @@ mod tests {
         assert_eq!(ar.version, "v1alpha1");
         assert_eq!(ar.kind, "SinkerContainer");
         assert_eq!(ar.api_version, "sinker.tubernetes.io/v1alpha1");
+    }
+
+    #[tokio::test]
+    async fn test_get_ar_from_subtree_nogroup() {
+        let subtree = &serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "test-config-map-1" },
+            "data": {
+                "dummykey": "dummyvalue",
+            },
+        });
+        let ar = get_ar_from_subtree(subtree).unwrap();
+        assert_eq!(ar.group, "");
+        assert_eq!(ar.version, "v1");
+        assert_eq!(ar.kind, "ConfigMap");
+        assert_eq!(ar.api_version, "v1");
     }
 
     #[tokio::test]
