@@ -24,12 +24,13 @@ spec:
                 items:
                   properties:
                     fromFieldPath:
+                      description: If `None` then to_field_path cannot be `None`.
                       nullable: true
                       type: string
                     toFieldPath:
+                      description: If `None` then from_field_path cannot be `None`.
+                      nullable: true
                       type: string
-                  required:
-                  - toFieldPath
                   type: object
                 type: array
               source:
