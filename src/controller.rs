@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use k8s_openapi::api::core::v1::Secret;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    core::DynamicObject,
+    core::{DynamicObject, GroupVersionKind, ObjectMeta},
     discovery::{self, ApiResource},
     runtime::controller::{Action, Controller},
     Api, Client, Config, Resource, ResourceExt,
@@ -196,6 +196,22 @@ fn apply_mappings(
                 subtree.clone(),
             )?;
             template.metadata = serde_json::value::from_value(metadata)?;
+        } else if mapping.to_field_path.is_empty() {
+            // this is like a clone_resource but the source is a subtree not the whole object.
+            // likely copying the inner resource of a SinkerContainer into root.
+            // we need to convert `subtree` into a DynamicObject that will work with our
+            // existing `clone_resource` function, taking care to preserve the metadata
+            // and not produce duplicate fields.
+            let ar = get_ar_from_subtree(&subtree)?;
+            let source_metadata = convert_metadata(&subtree["metadata"]);
+            let mut subtree = subtree.clone();
+            cleanup_subtree(&mut subtree);
+            let mut source = DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
+                .within(&subtree["metadata"]["namespace"].to_string())
+                .data(subtree);
+            source.metadata.annotations = source_metadata.annotations;
+            source.metadata.labels = source_metadata.labels;
+            template = clone_resource(&source, target_ref, &target_namespace, &ar)?;
         } else {
             set_field_path(&mut template.data, &mapping.to_field_path, subtree.clone())?;
         }
@@ -203,6 +219,69 @@ fn apply_mappings(
         debug!(%dbg, "after");
     }
     Ok(template)
+}
+
+// extract metadata that we can set on a DynamicObject from a serde_json value subtree.
+fn convert_metadata(subtree: &serde_json::Value) -> ObjectMeta {
+    let mut metadata = ObjectMeta {
+        ..Default::default()
+    };
+    if let serde_json::Value::Object(map) = &subtree["annotations"] {
+        metadata.annotations = Some(
+            map.iter()
+                .map(|(k, v)| (k.to_string(), v.as_str().unwrap().to_string()))
+                .collect::<BTreeMap<String, String>>(),
+        );
+    }
+    if let serde_json::Value::Object(map) = &subtree["labels"] {
+        metadata.labels = Some(
+            map.iter()
+                .map(|(k, v)| (k.to_string(), v.as_str().unwrap().to_string()))
+                .collect::<BTreeMap<String, String>>(),
+        );
+    }
+    metadata
+}
+
+// extract GVKN from a k8s resource in an arbitrary serde_json subtree.
+fn get_ar_from_subtree(subtree: &serde_json::Value) -> Result<ApiResource> {
+    let api_version = subtree["apiVersion"]
+        .as_str()
+        .ok_or(Error::MalformedInnerResource(
+            "failed to parse apiVersion".to_string(),
+        ))?;
+    // account for group-less resources by extracting version from the end first,
+    // then group if there is a term remaining.
+    let mut gv_terms = api_version.split("/").collect::<Vec<_>>();
+    let version = gv_terms
+        .pop()
+        .ok_or(Error::MalformedInnerResource(
+            "failed to parse apiVersion".to_string(),
+        ))?
+        .to_string();
+    let group = gv_terms.pop().unwrap_or("").to_string();
+    let kind = subtree["kind"]
+        .as_str()
+        .ok_or(Error::MalformedInnerResource(
+            "failed to parse kind".to_string(),
+        ))?
+        .to_string();
+    Ok(ApiResource::from_gvk(&GroupVersionKind {
+        group,
+        version,
+        kind,
+    }))
+}
+
+// used when creating a DynamicObject from a k8s resource in arbitrary subtree. removes the
+// fields that are already stored in the DynamicObject and we therefore don't want in .data.
+// if we didn't do this then the resulting resource would have these fields twice.
+fn cleanup_subtree(subtree: &mut serde_json::Value) {
+    if let serde_json::Value::Object(map) = subtree {
+        map.remove("apiVersion");
+        map.remove("kind");
+        map.remove("metadata");
+    }
 }
 
 fn error_policy(sinker: Arc<ResourceSync>, error: &Error, _ctx: Arc<Context>) -> Action {
@@ -251,5 +330,339 @@ where
         [] => Ok(json!(null)),
         [subtree] => Ok((*subtree).clone()),
         _ => Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resources::{Mapping, ResourceSyncSpec};
+    use kube::core::{ApiResource, GroupVersionKind};
+
+    #[tokio::test]
+    async fn test_get_ar_from_subtree() {
+        let subtree = &serde_json::json!({
+            "apiVersion": "sinker.tubernetes.io/v1alpha1",
+            "kind": "SinkerContainer",
+            "metadata": { "name": "test-sinker-container" },
+            "spec": {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": "test-config-map-1" },
+                "data": {
+                    "dummykey": "dummyvalue",
+                },
+            },
+        });
+        let ar = get_ar_from_subtree(subtree).unwrap();
+        assert_eq!(ar.group, "sinker.tubernetes.io");
+        assert_eq!(ar.version, "v1alpha1");
+        assert_eq!(ar.kind, "SinkerContainer");
+        assert_eq!(ar.api_version, "sinker.tubernetes.io/v1alpha1");
+    }
+
+    #[tokio::test]
+    async fn test_clone_resource() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "v1".to_string(),
+                        kind: "ConfigMap".to_string(),
+                        name: "test-configmap-1".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "v1".to_string(),
+                        kind: "ConfigMap".to_string(),
+                        name: "test-configmap-2".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let dynamic_sc: DynamicObject = serde_json::from_str(
+            &serde_json::to_string(&serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": "test-configmap-1" },
+                "data": {
+                    "dummykey": "dummyvalue",
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let expected = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "test-configmap-2",
+                "namespace": "default",
+            },
+            "data": {
+                "dummykey": "dummyvalue",
+            },
+        });
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "".to_string(),
+            version: "v1".to_string(),
+            kind: "ConfigMap".to_string(),
+        });
+        let target = clone_resource(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_mappings() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![Mapping {
+                    from_field_path: Some("spec.subtree1".to_string()),
+                    to_field_path: "spec.subtree2".to_string(),
+                }],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container-1".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container-2".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let dynamic_sc: DynamicObject = serde_json::from_str(
+            &serde_json::to_string(&serde_json::json!({
+                "apiVersion": "sinker.tubernetes.io/v1alpha1",
+                "kind": "SinkerContainer",
+                "metadata": { "name": "test-sinker-container-1" },
+                "spec": {
+                    "subtree1": {
+                        "key": "value",
+                    },
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let expected = serde_json::json!({
+            "apiVersion": "sinker.tubernetes.io/v1alpha1",
+            "kind": "SinkerContainer",
+            "metadata": {
+                "name": "test-sinker-container-2",
+                "namespace": "default",
+            },
+            "spec": {
+                "subtree2": {
+                    "key": "value",
+                },
+            },
+        });
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "sinker.tubernetes.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "SinkerContainer".to_string(),
+        });
+        let target = apply_mappings(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+            &resource_sync,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_mappings_to_metadata() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![
+                    Mapping {
+                        from_field_path: Some("spec.subtree1".to_string()),
+                        to_field_path: "spec.subtree2".to_string(),
+                    },
+                    Mapping {
+                        from_field_path: Some("metadata.labels".to_string()),
+                        to_field_path: "metadata.labels".to_string(),
+                    },
+                ],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container-1".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container-2".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let dynamic_sc: DynamicObject = serde_json::from_str(
+            &serde_json::to_string(&serde_json::json!({
+                "apiVersion": "sinker.tubernetes.io/v1alpha1",
+                "kind": "SinkerContainer",
+                "metadata": {
+                    "labels": { "key": "value" },
+                    "name": "test-sinker-container-1",
+                },
+                "spec": {
+                    "subtree1": {
+                        "key": "value",
+                    },
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let expected = serde_json::json!({
+            "apiVersion": "sinker.tubernetes.io/v1alpha1",
+            "kind": "SinkerContainer",
+            "metadata": {
+                "labels": { "key": "value" },
+                "name": "test-sinker-container-2",
+                "namespace": "default",
+            },
+            "spec": {
+                "subtree2": {
+                    "key": "value",
+                },
+            },
+        });
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "sinker.tubernetes.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "SinkerContainer".to_string(),
+        });
+        let target = apply_mappings(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+            &resource_sync,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_mappings_from_sinkercontainer() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![Mapping {
+                    from_field_path: Some("spec".to_string()),
+                    to_field_path: "".to_string(),
+                }],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "v1".to_string(),
+                        kind: "ConfigMap".to_string(),
+                        name: "test-config-map-2".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "sinker.tubernetes.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "SinkerContainer".to_string(),
+        });
+        let expected = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "annotations": {
+                    "key1": "value1",
+                },
+                "labels": {
+                    "key2": "value2",
+                },
+                "name": "test-config-map-2",
+                "namespace": "default",
+            },
+            "data": {
+                "dummykey": "dummyvalue",
+            },
+        });
+        let dynamic_sc: DynamicObject = serde_json::from_str(
+            &serde_json::to_string(&serde_json::json!({
+                "apiVersion": "sinker.tubernetes.io/v1alpha1",
+                "kind": "SinkerContainer",
+                "metadata": { "name": "test-sinker-container" },
+                "spec": {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {
+                        "annotations": { "key1": "value1" },
+                        "labels": { "key2": "value2" },
+                        "name": "test-config-map-1",
+                    },
+                    "data": {
+                        "dummykey": "dummyvalue",
+                    },
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let target = apply_mappings(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+            &resource_sync,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
     }
 }

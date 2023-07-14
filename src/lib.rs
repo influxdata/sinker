@@ -31,6 +31,9 @@ pub enum Error {
 
     #[error("JSONPath '{0}' didn't produce exactly one value")]
     JsonPathExactlyOneValue(String),
+
+    #[error("Expected k8s resource at subtree: {0}")]
+    MalformedInnerResource(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
