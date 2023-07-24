@@ -6,7 +6,10 @@ use kube::{
     api::{ListParams, Patch, PatchParams},
     core::{DynamicObject, GroupVersionKind, ObjectMeta},
     discovery::{self, ApiResource},
-    runtime::controller::{Action, Controller},
+    runtime::{
+        controller::{Action, Controller},
+        watcher,
+    },
     Api, Client, Config, Resource, ResourceExt,
 };
 use serde_json::json;
@@ -321,7 +324,7 @@ pub async fn run(client: Client) -> Result<()> {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
         std::process::exit(1);
     }
-    Controller::new(docs, ListParams::default())
+    Controller::new(docs, watcher::Config::default().any_semantic())
         .shutdown_on_signal()
         .run(reconcile, error_policy, Arc::new(Context { client }))
         .filter_map(|x| async move { std::result::Result::ok(x) })
