@@ -15,8 +15,9 @@ kube = { version = "0.83.0", features = ["runtime", "derive"] }
 kube-derive = "0.84.0"
 k8s-openapi = { version = "0.18.0", features = ["v1_26"] }
 # We cannot bump kube-res past 0.82.0 until this PR is merged: https://github.com/olix0r/kubert/pull/163
-# until then we can use this fork (mkm reviewed it and pinned the commit)
-kubert = { git = "https://github.com/hawkw/kubert", features = ["clap", "runtime", "server"], rev="1c44765207c78aadb30b39138b2ee8d8c9ffa2c9" }
+# until then we can use this fork (mkm reviewed it and pinned the commit).
+# mkm cherry-picked the commit on top of v0.16.1
+kubert = { git = "https://github.com/kubecfg/kubert", features = ["clap", "runtime", "server", "metrics"], rev="277222baaef82d53cbafdfb18cac559e346e1ce4" }
 # kubert = { version = "0.16.1", features = ["clap", "runtime", "server"] }
 tokio = { version = "1.26", features = ["full"] }
 anyhow = { version = "1", features = ["backtrace"] }
