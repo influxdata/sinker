@@ -364,7 +364,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_ar_from_subtree() {
         let subtree = &serde_json::json!({
-            "apiVersion": "sinker.tubernetes.io/v1alpha1",
+            "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": { "name": "test-sinker-container" },
             "spec": {
@@ -372,10 +372,10 @@ mod tests {
             },
         });
         let ar = get_ar_from_subtree(subtree).unwrap();
-        assert_eq!(ar.group, "sinker.tubernetes.io");
+        assert_eq!(ar.group, "sinker.influxdata.io");
         assert_eq!(ar.version, "v1alpha1");
         assert_eq!(ar.kind, "SinkerContainer");
-        assert_eq!(ar.api_version, "sinker.tubernetes.io/v1alpha1");
+        assert_eq!(ar.api_version, "sinker.influxdata.io/v1alpha1");
     }
 
     #[tokio::test]
@@ -471,7 +471,7 @@ mod tests {
                 }],
                 source: ClusterResourceRef {
                     resource_ref: GVKN {
-                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
                         kind: "SinkerContainer".to_string(),
                         name: "test-sinker-container-1".to_string(),
                     },
@@ -479,7 +479,7 @@ mod tests {
                 },
                 target: ClusterResourceRef {
                     resource_ref: GVKN {
-                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
                         kind: "SinkerContainer".to_string(),
                         name: "test-sinker-container-2".to_string(),
                     },
@@ -489,7 +489,7 @@ mod tests {
         );
         let dynamic_sc: DynamicObject = serde_json::from_str(
             &serde_json::to_string(&serde_json::json!({
-                "apiVersion": "sinker.tubernetes.io/v1alpha1",
+                "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": { "name": "test-sinker-container-1" },
                 "spec": {
@@ -502,7 +502,7 @@ mod tests {
         )
         .unwrap();
         let expected = serde_json::json!({
-            "apiVersion": "sinker.tubernetes.io/v1alpha1",
+            "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": {
                 "name": "test-sinker-container-2",
@@ -515,7 +515,7 @@ mod tests {
             },
         });
         let ar = ApiResource::from_gvk(&GroupVersionKind {
-            group: "sinker.tubernetes.io".to_string(),
+            group: "sinker.influxdata.io".to_string(),
             version: "v1alpha1".to_string(),
             kind: "SinkerContainer".to_string(),
         });
@@ -550,7 +550,7 @@ mod tests {
                 ],
                 source: ClusterResourceRef {
                     resource_ref: GVKN {
-                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
                         kind: "SinkerContainer".to_string(),
                         name: "test-sinker-container-1".to_string(),
                     },
@@ -558,7 +558,7 @@ mod tests {
                 },
                 target: ClusterResourceRef {
                     resource_ref: GVKN {
-                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
                         kind: "SinkerContainer".to_string(),
                         name: "test-sinker-container-2".to_string(),
                     },
@@ -568,7 +568,7 @@ mod tests {
         );
         let dynamic_sc: DynamicObject = serde_json::from_str(
             &serde_json::to_string(&serde_json::json!({
-                "apiVersion": "sinker.tubernetes.io/v1alpha1",
+                "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": {
                     "labels": { "key": "value" },
@@ -584,7 +584,7 @@ mod tests {
         )
         .unwrap();
         let expected = serde_json::json!({
-            "apiVersion": "sinker.tubernetes.io/v1alpha1",
+            "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": {
                 "labels": { "key": "value" },
@@ -598,7 +598,7 @@ mod tests {
             },
         });
         let ar = ApiResource::from_gvk(&GroupVersionKind {
-            group: "sinker.tubernetes.io".to_string(),
+            group: "sinker.influxdata.io".to_string(),
             version: "v1alpha1".to_string(),
             kind: "SinkerContainer".to_string(),
         });
@@ -627,7 +627,7 @@ mod tests {
                 }],
                 source: ClusterResourceRef {
                     resource_ref: GVKN {
-                        api_version: "sinker.tubernetes.io/v1alpha1".to_string(),
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
                         kind: "SinkerContainer".to_string(),
                         name: "test-sinker-container".to_string(),
                     },
@@ -644,9 +644,9 @@ mod tests {
             },
         );
         let ar = ApiResource::from_gvk(&GroupVersionKind {
-            group: "sinker.tubernetes.io".to_string(),
-            version: "v1alpha1".to_string(),
-            kind: "SinkerContainer".to_string(),
+            group: "".to_string(),
+            version: "v1".to_string(),
+            kind: "ConfigMap".to_string(),
         });
         let expected = serde_json::json!({
             "apiVersion": "v1",
@@ -667,7 +667,7 @@ mod tests {
         });
         let dynamic_sc: DynamicObject = serde_json::from_str(
             &serde_json::to_string(&serde_json::json!({
-                "apiVersion": "sinker.tubernetes.io/v1alpha1",
+                "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": { "name": "test-sinker-container" },
                 "spec": {
@@ -686,6 +686,81 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        let target = apply_mappings(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+            &resource_sync,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_mappings_to_sinkercontainer() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![Mapping {
+                    from_field_path: None,
+                    to_field_path: Some("spec".to_string()),
+                }],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "v1".to_string(),
+                        kind: "Deployment".to_string(),
+                        name: "test-deployment".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "sinker.influxdata.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "SinkerContainer".to_string(),
+        });
+        let source_dep = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Deployment",
+            "metadata": {
+                "annotations": {
+                    "key1": "value1",
+                },
+                "labels": {
+                    "key2": "value2",
+                },
+                "name": "test-deployment",
+                "namespace": "default",
+            },
+            "spec": {
+                "dummykey": "dummyvalue",
+            },
+            "status": {
+                "isgood": true,
+            },
+        });
+        let expected = serde_json::json!({
+            "apiVersion": "sinker.influxdata.io/v1alpha1",
+            "kind": "SinkerContainer",
+            "metadata": { "name": "test-sinker-container", "namespace": "default" },
+            "spec": source_dep,
+        });
+        let dynamic_sc: DynamicObject =
+            serde_json::from_str(&serde_json::to_string(&serde_json::json!(source_dep)).unwrap())
+                .unwrap();
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
