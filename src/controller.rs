@@ -100,11 +100,16 @@ async fn api_for(
                 Some(namespace.to_owned()),
             ),
             None => (
-                Api::default_namespaced_with(client.clone(), &ar),
-                Some(client.default_namespace().to_owned()),
+                // assume cluster-scoped resource.
+                // TODO: should someday handle "default namespace for the kubeconfig being used"
+                Api::all_with(client.clone(), &ar),
+                None,
             ),
         },
-        None => (Api::all_with(client.clone(), &ar), None),
+        None => (
+            Api::namespaced_with(client.clone(), local_ns, &ar),
+            Some(local_ns.to_owned()),
+        ),
     };
 
     Ok(NamespacedApi { api, ar, namespace })
@@ -211,13 +216,11 @@ fn apply_mappings(
                 let source_metadata = convert_metadata(&subtree["metadata"]);
                 let mut subtree = subtree.clone();
                 cleanup_subtree(&mut subtree);
-                let mut source = if let Value::Null = subtree["metadata"]["namespace"] {
-                    DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar).data(subtree)
-                } else {
-                    DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
-                        .within(&subtree["metadata"]["namespace"].to_string())
-                        .data(subtree)
-                };
+                let mut source = DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
+                    .data(subtree.clone());
+                source.metadata.namespace = subtree["metadata"]["namespace"]
+                    .as_str()
+                    .map(str::to_string);
                 source.metadata.annotations = source_metadata.annotations;
                 source.metadata.labels = source_metadata.labels;
                 template = clone_resource(&source, target_ref, target_namespace, &ar)?;
