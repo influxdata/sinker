@@ -161,13 +161,8 @@ fn clone_resource(
     target_namespace: Option<&str>,
     ar: &ApiResource,
 ) -> Result<DynamicObject> {
-    let mut target = if let Some(ns) = target_namespace {
-        DynamicObject::new(&target_ref.name, ar)
-            .within(ns)
-            .data(source.data.clone())
-    } else {
-        DynamicObject::new(&target_ref.name, ar).data(source.data.clone())
-    };
+    let mut target = DynamicObject::new(&target_ref.name, ar).data(source.data.clone());
+    target.metadata.namespace = target_namespace.map(String::from);
 
     target.metadata.annotations = source.metadata.annotations.clone().map(cleanup_annotations);
     target.metadata.labels = source.metadata.labels.clone();
@@ -183,13 +178,8 @@ fn apply_mappings(
     ar: &ApiResource,
     sinker: &ResourceSync,
 ) -> Result<DynamicObject> {
-    let mut template = if let Some(ns) = target_namespace {
-        DynamicObject::new(&target_ref.name, ar)
-            .within(ns)
-            .data(json!({}))
-    } else {
-        DynamicObject::new(&target_ref.name, ar).data(json!({}))
-    };
+    let mut template = DynamicObject::new(&target_ref.name, ar).data(json!({}));
+    template.metadata.namespace = target_namespace.map(String::from);
 
     for mapping in &sinker.spec.mappings {
         let subtree = find_field_path(source, &mapping.from_field_path)?;
