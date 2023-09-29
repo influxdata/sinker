@@ -12,7 +12,7 @@ use kube::{
     },
     Api, Client, Config, Resource, ResourceExt,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::{
     mapping::set_field_path,
