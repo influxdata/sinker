@@ -76,7 +76,7 @@ async fn cluster_client(
 struct NamespacedApi {
     api: Api<DynamicObject>,
     ar: ApiResource,
-    namespace: String,
+    namespace: Option<String>,
 }
 
 async fn api_for(
@@ -97,17 +97,14 @@ async fn api_for(
         Some(cluster) => match &cluster.namespace {
             Some(namespace) => (
                 Api::namespaced_with(client.clone(), namespace, &ar),
-                namespace.to_owned(),
+                Some(namespace.to_owned()),
             ),
             None => (
                 Api::default_namespaced_with(client.clone(), &ar),
-                client.default_namespace().to_owned(),
+                Some(client.default_namespace().to_owned()),
             ),
         },
-        None => (
-            Api::namespaced_with(client.clone(), local_ns, &ar),
-            local_ns.to_owned(),
-        ),
+        None => (Api::all_with(client.clone(), &ar), None),
     };
 
     Ok(NamespacedApi { api, ar, namespace })
@@ -132,12 +129,18 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
         namespace: target_namespace,
     } = api_for(&sinker.spec.target, &local_ns, Arc::clone(&ctx)).await?;
 
-    debug!(%target_namespace, "got client for target");
+    debug!(?target_namespace, "got client for target");
 
     let target = if sinker.spec.mappings.is_empty() {
-        clone_resource(&source, target_ref, &target_namespace, &ar)?
+        clone_resource(&source, target_ref, target_namespace.as_deref(), &ar)?
     } else {
-        apply_mappings(&source, target_ref, &target_namespace, &ar, &sinker)?
+        apply_mappings(
+            &source,
+            target_ref,
+            target_namespace.as_deref(),
+            &ar,
+            &sinker,
+        )?
     };
     debug!(?target, "produced target object");
 
@@ -155,12 +158,16 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
 fn clone_resource(
     source: &DynamicObject,
     target_ref: &GVKN,
-    target_namespace: &str,
+    target_namespace: Option<&str>,
     ar: &ApiResource,
 ) -> Result<DynamicObject> {
-    let mut target = DynamicObject::new(&target_ref.name, ar)
-        .within(target_namespace)
-        .data(source.data.clone());
+    let mut target = if let Some(ns) = target_namespace {
+        DynamicObject::new(&target_ref.name, ar)
+            .within(ns)
+            .data(source.data.clone())
+    } else {
+        DynamicObject::new(&target_ref.name, ar).data(source.data.clone())
+    };
 
     target.metadata.annotations = source.metadata.annotations.clone().map(cleanup_annotations);
     target.metadata.labels = source.metadata.labels.clone();
@@ -172,13 +179,17 @@ fn clone_resource(
 fn apply_mappings(
     source: &DynamicObject,
     target_ref: &GVKN,
-    target_namespace: &str,
+    target_namespace: Option<&str>,
     ar: &ApiResource,
     sinker: &ResourceSync,
 ) -> Result<DynamicObject> {
-    let mut template = DynamicObject::new(&target_ref.name, ar)
-        .within(target_namespace)
-        .data(json!({}));
+    let mut template = if let Some(ns) = target_namespace {
+        DynamicObject::new(&target_ref.name, ar)
+            .within(ns)
+            .data(json!({}))
+    } else {
+        DynamicObject::new(&target_ref.name, ar).data(json!({}))
+    };
 
     for mapping in &sinker.spec.mappings {
         let subtree = find_field_path(source, &mapping.from_field_path)?;
@@ -219,7 +230,7 @@ fn apply_mappings(
                 };
                 source.metadata.annotations = source_metadata.annotations;
                 source.metadata.labels = source_metadata.labels;
-                template = clone_resource(&source, target_ref, &target_namespace, &ar)?;
+                template = clone_resource(&source, target_ref, target_namespace, &ar)?;
             }
             Mapping {
                 from_field_path: _,
@@ -454,7 +465,7 @@ mod tests {
         let target = clone_resource(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
         )
         .unwrap();
@@ -515,7 +526,7 @@ mod tests {
         let target = clone_resource(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
         )
         .unwrap();
@@ -587,7 +598,7 @@ mod tests {
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
             &resource_sync,
         )
@@ -670,7 +681,7 @@ mod tests {
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
             &resource_sync,
         )
@@ -754,7 +765,7 @@ mod tests {
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
             &resource_sync,
         )
@@ -826,7 +837,7 @@ mod tests {
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
             &resource_sync,
         )
@@ -901,7 +912,7 @@ mod tests {
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
-            "default",
+            Some("default"),
             &ar,
             &resource_sync,
         )
