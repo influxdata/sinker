@@ -12,7 +12,7 @@ use kube::{
     },
     Api, Client, Config, Resource, ResourceExt,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
     mapping::set_field_path,
@@ -210,9 +210,13 @@ fn apply_mappings(
                 let source_metadata = convert_metadata(&subtree["metadata"]);
                 let mut subtree = subtree.clone();
                 cleanup_subtree(&mut subtree);
-                let mut source = DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
-                    .within(&subtree["metadata"]["namespace"].to_string())
-                    .data(subtree);
+                let mut source = if let Value::Null = subtree["metadata"]["namespace"] {
+                    DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar).data(subtree)
+                } else {
+                    DynamicObject::new(&subtree["metadata"]["name"].to_string(), &ar)
+                        .within(&subtree["metadata"]["namespace"].to_string())
+                        .data(subtree)
+                };
                 source.metadata.annotations = source_metadata.annotations;
                 source.metadata.labels = source_metadata.labels;
                 template = clone_resource(&source, target_ref, &target_namespace, &ar)?;
@@ -461,6 +465,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_clone_resource_cluster_scoped() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "rbac.authorization.k8s.io/v1".to_string(),
+                        kind: "ClusterRole".to_string(),
+                        name: "test-clusterrole-1".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "rbac.authorization.k8s.io/v1".to_string(),
+                        kind: "ClusterRole".to_string(),
+                        name: "test-clusterrole-2".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let dynamic_sc: DynamicObject = serde_json::from_str(
+            &serde_json::to_string(&serde_json::json!({
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "ClusterRole",
+                "metadata": { "name": "test-clusterrole-1" },
+                "rules": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let expected = serde_json::json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": {
+                "name": "test-clusterrole-2",
+                "namespace": "default",
+            },
+            "rules": [],
+        });
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "rbac.authorization.k8s.io".to_string(),
+            version: "v1".to_string(),
+            kind: "ClusterRole".to_string(),
+        });
+        let target = clone_resource(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    #[tokio::test]
     async fn test_apply_mappings() {
         let resource_sync = ResourceSync::new(
             "sinker-test",
@@ -681,6 +746,78 @@ mod tests {
                     "data": {
                         "dummykey": "dummyvalue",
                     },
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let target = apply_mappings(
+            &dynamic_sc,
+            &resource_sync.spec.target.resource_ref,
+            "default",
+            &ar,
+            &resource_sync,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_mappings_from_sinkercontainer_clusterscoped() {
+        let resource_sync = ResourceSync::new(
+            "sinker-test",
+            ResourceSyncSpec {
+                mappings: vec![Mapping {
+                    from_field_path: Some("spec".to_string()),
+                    to_field_path: None,
+                }],
+                source: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "sinker.influxdata.io/v1alpha1".to_string(),
+                        kind: "SinkerContainer".to_string(),
+                        name: "test-sinker-container".to_string(),
+                    },
+                    cluster: None,
+                },
+                target: ClusterResourceRef {
+                    resource_ref: GVKN {
+                        api_version: "rbac.authorization.k8s.io/v1".to_string(),
+                        kind: "ClusterRole".to_string(),
+                        name: "test-clusterrole".to_string(),
+                    },
+                    cluster: None,
+                },
+            },
+        );
+        let ar = ApiResource::from_gvk(&GroupVersionKind {
+            group: "rbac.authorization.k8s.io".to_string(),
+            version: "v1".to_string(),
+            kind: "ClusterRole".to_string(),
+        });
+        let expected = serde_json::json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": {
+                "name": "test-clusterrole",
+                "namespace": "default",
+            },
+            "rules": [],
+        });
+        let dynamic_sc: DynamicObject = serde_json::from_str(
+            &serde_json::to_string(&serde_json::json!({
+                "apiVersion": "sinker.influxdata.io/v1alpha1",
+                "kind": "SinkerContainer",
+                "metadata": { "name": "test-sinker-container" },
+                "spec": {
+                    "apiVersion": "rbac.authorization.k8s.io/v1",
+                    "kind": "ClusterRole",
+                    "metadata": {
+                        "name": "test-clusterrole",
+                    },
+                    "rules": [],
                 },
             }))
             .unwrap(),
