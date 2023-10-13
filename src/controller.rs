@@ -236,12 +236,12 @@ fn apply_mappings(
                     let mut metadata = serde_json::value::to_value(template.metadata.clone())?;
                     set_field_path(
                         &mut metadata,
-                        &to_field_path.strip_prefix("metadata.").unwrap(),
+                        to_field_path.strip_prefix("metadata.").unwrap(),
                         subtree.clone(),
                     )?;
                     template.metadata = serde_json::value::from_value(metadata)?;
                 } else {
-                    set_field_path(&mut template.data, &to_field_path, subtree.clone())?;
+                    set_field_path(&mut template.data, to_field_path, subtree.clone())?;
                 }
             }
         }
@@ -348,7 +348,7 @@ where
 {
     let resource_json = serde_json::to_value(&resource)?;
     let from_field_path = if let Some(from_field_path) = from_field_path {
-        if from_field_path.len() == 0 {
+        if from_field_path.is_empty() {
             "$".to_string()
         } else {
             format!("$.{}", from_field_path)
