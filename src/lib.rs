@@ -18,7 +18,7 @@ pub enum Error {
     SerializationError(#[from] serde_json::Error),
 
     #[error("JsonPathError: {0}")]
-    JsonPathError(#[from] jsonpath_lib::JsonPathError),
+    JsonPathError(#[from] serde_json_path::ParseError),
 
     #[error("Namespace is required")]
     NamespaceRequired,

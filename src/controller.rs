@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use serde_json_path::JsonPath;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use k8s_openapi::api::core::v1::Secret;
@@ -356,11 +357,11 @@ where
     } else {
         "$".to_string()
     };
-    match jsonpath_lib::select(&resource_json, &from_field_path)?.as_slice() {
-        [] => Ok(json!(null)),
-        [subtree] => Ok((*subtree).clone()),
-        _ => Err(Error::JsonPathExactlyOneValue(from_field_path.to_owned())),
-    }
+    let subtree = JsonPath::parse(&from_field_path)?
+        .query(&resource_json)
+        .at_most_one()
+        .map_err(|_| Error::JsonPathExactlyOneValue(from_field_path.to_owned()))?;
+    Ok(subtree.cloned().unwrap_or(json!(null)))
 }
 
 #[cfg(test)]
