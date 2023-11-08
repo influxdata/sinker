@@ -14,7 +14,7 @@ futures = "0.3"
 kube = { version = "0.85.0", features = ["runtime", "derive"] }
 kube-derive = "0.84.0"
 k8s-openapi = { version = "0.19.0", features = ["v1_26"] }
-kubert = { version = "0.18.0", features = ["clap", "runtime", "server", "rustls-tls"] }
+kubert = { version = "0.19.0", features = ["clap", "runtime", "server", "rustls-tls"] }
 tokio = { version = "1.26", features = ["full"] }
 anyhow = { version = "1", features = ["backtrace"] }
 tracing = "0.1"
