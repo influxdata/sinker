@@ -1628,9 +1628,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json_path"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35c79e076e7e0e91510241afe3c432cb8b5126245153f7141077ffb074d270eb"
+checksum = "dc6b36749a33d06ec4e2ae510385fd493d12b902df12ac608b3d6f96331cc697"
 dependencies = [
  "inventory",
  "nom",
@@ -1645,9 +1645,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json_path_core"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e774ec1b58d942c47f7abbdc30ba876e5525590c5388760185b1fbe283f9f10c"
+checksum = "90e0c3e5a598253118a1b75991dcb8bea918a9aab8999c21da36072b490796ca"
 dependencies = [
  "inventory",
  "once_cell",
@@ -1658,9 +1658,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json_path_macros"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fa8d2a13b43f935dd6864d91d2ea2426624bb9f3c7263d943b31f449ffc4fb7"
+checksum = "2bc62d4c8c1f7ab0b68b0f66ebc2e5d2a0dbb8b44646340c04ff5077daca54aa"
 dependencies = [
  "inventory",
  "once_cell",
