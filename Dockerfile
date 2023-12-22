@@ -16,7 +16,7 @@ COPY . .
 RUN cargo build --release --bin sinker
 
 # We do not need the Rust toolchain to run the binary!
-FROM debian:bullseye-slim@sha256:77f46c1cf862290e750e913defffb2828c889d291a93bdd10a7a0597720948fc AS runtime
+FROM debian:bookworm-slim@sha256:45287d89d96414e57c7705aa30cb8f9836ef30ae8897440dd8f06c4cff801eec AS runtime
 WORKDIR app
 COPY --from=builder /app/target/release/sinker /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/sinker"]
