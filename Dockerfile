@@ -1,6 +1,6 @@
 # Leveraging the pre-built Docker images with
 # cargo-chef and the Rust toolchain
-FROM lukemathwalker/cargo-chef:latest-rust-1.73.0@sha256:09ec7a922dc592d980f3fcfa97b873e1a678ad2fb252671569a65187f1cd4a75 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.74-bookworm@sha256:f2be0d7e17e30166653ccc67498e82759d8124ed8770b48f06395caa8e95c97f AS chef
 WORKDIR app
 
 FROM chef AS planner
@@ -16,7 +16,16 @@ COPY . .
 RUN cargo build --release --bin sinker
 
 # We do not need the Rust toolchain to run the binary!
-FROM debian:bullseye-slim@sha256:77f46c1cf862290e750e913defffb2828c889d291a93bdd10a7a0597720948fc AS runtime
+FROM debian:bookworm-slim@sha256:f80c45482c8d147da87613cb6878a7238b8642bcc24fc11bad78c7bec726f340
+
+RUN apt update \
+    && apt install --yes ca-certificates libssl3 --no-install-recommends \
+    && rm -rf /var/lib/{apt,dpkg,cache,log} \
+    && groupadd --gid 1500 sinker \
+    && useradd --uid 1500 --gid sinker --shell /bin/bash --create-home sinker
+
+USER sinker
+
 WORKDIR app
 COPY --from=builder /app/target/release/sinker /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/sinker"]
