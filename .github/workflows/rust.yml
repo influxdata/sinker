@@ -47,7 +47,6 @@ jobs:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
-        if: github.event_name != 'pull_request'
 
       - run: |
           echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
