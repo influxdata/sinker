@@ -70,4 +70,3 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
-        if: github.event_name != 'pull_request'
