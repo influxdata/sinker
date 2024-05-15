@@ -18,11 +18,18 @@ RUN cargo build --release --bin sinker
 # We do not need the Rust toolchain to run the binary!
 FROM debian:bookworm-slim@sha256:f80c45482c8d147da87613cb6878a7238b8642bcc24fc11bad78c7bec726f340
 
+# Update the system and install necessary packages
 RUN apt update \
     && apt install --yes ca-certificates libssl3 --no-install-recommends \
-    && rm -rf /var/lib/{apt,dpkg,cache,log} \
-    && groupadd --gid 1500 sinker \
+    && rm -rf /var/lib/{apt,dpkg,cache,log}
+
+# Remove setuid/setgid bits from executables as a hardening measure so non-root processes can't escalate.
+RUN find / \( -path /dev -o -path /proc -o -path /sys \) -prune -o -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} \;
+
+# Create a dedicated user and group for the application
+RUN groupadd --gid 1500 sinker \
     && useradd --uid 1500 --gid sinker --shell /bin/bash --create-home sinker
+
 
 USER sinker
 
