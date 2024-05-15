@@ -47,7 +47,6 @@ jobs:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
-        if: github.event_name != 'pull_request'
 
       - run: |
           echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
@@ -60,7 +59,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: false
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
-        if: github.event_name == 'pull_request'
 
       - name: Build & Push
         uses: depot/build-push-action@v1
