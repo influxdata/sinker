@@ -258,7 +258,7 @@ async fn reconcile_normally(
                     kind: ResourceSync::kind(&()).to_string(),
                     name: name.to_owned(),
                     uid: sinker.metadata.uid.to_owned().ok_or(Error::UIDRequired)?,
-                    controller: Some(true),
+                    controller: Some(false),
                     block_owner_deletion: Some(true),
                 });
 
