@@ -212,38 +212,42 @@ async fn reconcile_normally(sinker: Arc<ResourceSync>, ctx: Arc<Context>, name: 
 
     debug!(?target_namespace, "got client for target");
 
-    let target = if sinker.spec.mappings.is_empty() {
-        clone_resource(&source, target_ref, target_namespace.as_deref(), &ar)?
-    } else {
-        apply_mappings(
-            &source,
-            target_ref,
-            target_namespace.as_deref(),
-            &ar,
-            &sinker,
-        )?
-    };
+    let target = {
+        let mut target = if sinker.spec.mappings.is_empty() {
+            clone_resource(&source, target_ref, target_namespace.as_deref(), &ar)?
+        } else {
+            apply_mappings(
+                &source,
+                target_ref,
+                target_namespace.as_deref(),
+                &ar,
+                &sinker,
+            )?
+        };
 
-    // If the target is local then add an owner reference to it
-    let target = match sinker.spec.target.cluster.to_owned() {
-        Some(_) => {
-            target
-        }
-        None => {
-            target.owner_references().push(OwnerReference {
-                api_version: ResourceSync::api_version(&sinker),
-                kind: ResourceSync::kind(&sinker),
-                name: sinker.metadata.name.clone(),
-                uid: sinker.metadata.uid.clone(),
-                controller: Some(true),
-                block_owner_deletion: Some(true),
-            })
+        // If the target is local then add an owner reference to it
+        match sinker.spec.target.cluster.to_owned() {
+            Some(_) => {
+                target
+            }
+            None => {
+                target.owner_references_mut().push(OwnerReference {
+                    api_version: ResourceSync::api_version(&()).to_string(),
+                    kind: ResourceSync::kind(&()).to_string(),
+                    name: name.to_owned(),
+                    uid: sinker.metadata.uid.to_owned().ok_or(Error::UIDRequired)?,
+                    controller: Some(true),
+                    block_owner_deletion: Some(true),
+                });
+
+                target
+            }
         }
     };
 
     debug!(?target, "produced target object");
 
-    let ssapply = PatchParams::apply(&ResourceSync::group(&sinker)).force();
+    let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
     api.patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
 
@@ -253,7 +257,7 @@ async fn reconcile_normally(sinker: Arc<ResourceSync>, ctx: Arc<Context>, name: 
 }
 
 async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
-    let name = sinker.name_any();
+    let name = sinker.metadata.name.to_owned().ok_or(Error::NameRequired)?;
     info!(?name, "running reconciler");
 
     debug!(?sinker.spec, "got");

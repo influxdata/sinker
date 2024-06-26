@@ -22,6 +22,12 @@ pub enum Error {
     #[error("JsonPathError: {0}")]
     JsonPathError(#[from] serde_json_path::ParseError),
 
+    #[error("Name is required")]
+    NameRequired,
+
+    #[error("UID is required")]
+    UIDRequired,
+
     #[error("Namespace is required")]
     NamespaceRequired,
 
