@@ -164,10 +164,10 @@ async fn reconcile_deleted_resource(sinker: Arc<ResourceSync>, ctx: Arc<Context>
         }
         Err(kube::Error::Api(err)) if err.code == 404 => {
             // Target has been deleted, remove the finalizer from the ResourceSync
-            let patch = Strategic(
+            let patch = Merge(
                 json!({
                     "metadata": {
-                        "$deleteFromPrimitiveList/finalizers": [FINALIZER],
+                        "finalizers": [],
                     },
                 }),
             );
@@ -183,7 +183,7 @@ async fn reconcile_deleted_resource(sinker: Arc<ResourceSync>, ctx: Arc<Context>
 
 async fn add_target_finalizer(sinker: Arc<ResourceSync>, ctx: Arc<Context>, name: &String, local_ns: &String) -> Result<Action> {
     let api = sinker.api(ctx);
-    let patch = Strategic(
+    let patch = Merge(
         json!({
             "metadata": {
                 "finalizers": [FINALIZER],
