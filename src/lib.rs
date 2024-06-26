@@ -1,5 +1,7 @@
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::bare_urls, rust_2018_idioms)]
 
+const FINALIZER: &str = "sinker.influxdata.io/target";
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Kube Error: {0}")]

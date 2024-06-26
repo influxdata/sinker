@@ -1,28 +1,26 @@
-use futures::StreamExt;
-use serde_json_path::JsonPath;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    core::{DynamicObject, GroupVersionKind, ObjectMeta},
-    discovery::{self, ApiResource},
-    runtime::{
+    Api,
+    Client,
+    Config,
+    core::{DynamicObject, GroupVersionKind, ObjectMeta}, discovery::{self, ApiResource}, Resource, ResourceExt, runtime::{
         controller::{Action, Controller},
         watcher,
     },
-    Api, Client, Config, Resource, ResourceExt,
 };
+use kube::api::DeleteParams;
+use kube::api::Patch::{Merge, Strategic};
 use serde_json::json;
-
-use crate::{
-    mapping::set_field_path,
-    resources::{ClusterRef, ClusterResourceRef, Mapping, ResourceSync, GVKN},
-    Error, Result,
-};
-
+use serde_json_path::JsonPath;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
+
+use crate::{Error, FINALIZER, mapping::set_field_path, resources::{ClusterRef, ClusterResourceRef, GVKN, Mapping, ResourceSync}, Result};
 
 struct Context {
     client: Client,
@@ -116,15 +114,92 @@ async fn api_for(
     Ok(NamespacedApi { api, ar, namespace })
 }
 
-async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
-    let name = sinker.name_any();
-    info!(?name, "running reconciler");
+macro_rules! requeue_after {
+    ($duration:expr) => {
+        Ok(Action::requeue(Duration::from_secs($duration)))
+    };
+    () => {
+        Ok(Action::requeue(Duration::from_secs(5)))
+    };
+}
 
-    debug!(?sinker.spec, "got");
-    let local_ns = sinker.namespace().ok_or(Error::NamespaceRequired)?;
+impl ResourceSync {
+    fn has_been_deleted(&self) -> bool {
+        self.metadata.deletion_timestamp.is_some()
+    }
 
+    fn has_target_finalizer(&self) -> bool {
+        self.metadata.finalizers.as_ref().map_or(false, |f| f.contains(&FINALIZER.to_string()))
+    }
+
+    fn api(&self, ctx: Arc<Context>) -> Api<Self> {
+        match self.namespace() {
+            None => Api::all(ctx.client.clone()),
+            Some(ns) => Api::namespaced(ctx.client.clone(), &ns),
+        }
+    }
+}
+
+async fn reconcile_deleted_resource(sinker: Arc<ResourceSync>, ctx: Arc<Context>, name: &String, local_ns: &String) -> Result<Action> {
+    if !sinker.has_target_finalizer() {
+        // We have already removed our finalizer, so nothing more needs to be done
+        return Ok(Action::await_change())
+    }
+
+    let NamespacedApi { api, .. } = api_for(&sinker.spec.target, local_ns, Arc::clone(&ctx)).await?;
+
+    let target_name = &sinker.spec.target.resource_ref.name;
+
+    match api.get(target_name).await {
+        Ok(target) if target.metadata.deletion_timestamp.is_some() => {
+            // Target is being deleted, wait for it to be deleted
+            // For now we need a requeue after, but in the future we should try to watch the target if we can
+            requeue_after!()
+        }
+        Ok(_) => {
+            api.delete(target_name, &DeleteParams::foreground()).await?;
+            // Deleted target, wait for it to be deleted
+            // For now we need a requeue after, but in the future we should try to watch the target if we can
+            requeue_after!()
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            // Target has been deleted, remove the finalizer from the ResourceSync
+            let patch = Strategic(
+                json!({
+                    "metadata": {
+                        "$deleteFromPrimitiveList/finalizers": [FINALIZER],
+                    },
+                }),
+            );
+
+            sinker.api(ctx).patch(name, &PatchParams::default(), &patch).await?;
+
+            // We have removed our finalizer, so nothing more needs to be done
+            Ok(Action::await_change())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn add_target_finalizer(sinker: Arc<ResourceSync>, ctx: Arc<Context>, name: &String, local_ns: &String) -> Result<Action> {
+    let api = sinker.api(ctx);
+    let patch = Strategic(
+        json!({
+            "metadata": {
+                "finalizers": [FINALIZER],
+            },
+        }),
+    );
+
+    api.patch(name, &PatchParams::default(), &patch).await?;
+
+    // For now we are watching all events for the ResourceSync, so the patch will trigger a reconcile
+    Ok(Action::await_change())
+}
+
+async fn reconcile_normally(sinker: Arc<ResourceSync>, ctx: Arc<Context>, name: &String, local_ns: &String) -> Result<Action> {
     let NamespacedApi { api, .. } =
-        api_for(&sinker.spec.source, &local_ns, Arc::clone(&ctx)).await?;
+        api_for(&sinker.spec.source, local_ns, Arc::clone(&ctx)).await?;
     let source = api.get(&sinker.spec.source.resource_ref.name).await?;
     debug!(?source, "got source object");
 
@@ -133,7 +208,7 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
         api,
         ar,
         namespace: target_namespace,
-    } = api_for(&sinker.spec.target, &local_ns, Arc::clone(&ctx)).await?;
+    } = api_for(&sinker.spec.target, local_ns, Arc::clone(&ctx)).await?;
 
     debug!(?target_namespace, "got client for target");
 
@@ -148,16 +223,53 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
             &sinker,
         )?
     };
+
+    // If the target is local then add an owner reference to it
+    let target = match sinker.spec.target.cluster.to_owned() {
+        Some(_) => {
+            target
+        }
+        None => {
+            target.owner_references().push(OwnerReference {
+                api_version: ResourceSync::api_version(&sinker),
+                kind: ResourceSync::kind(&sinker),
+                name: sinker.metadata.name.clone(),
+                uid: sinker.metadata.uid.clone(),
+                controller: Some(true),
+                block_owner_deletion: Some(true),
+            })
+        }
+    };
+
     debug!(?target, "produced target object");
 
-    let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
+    let ssapply = PatchParams::apply(&ResourceSync::group(&sinker)).force();
     api.patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
 
     info!(?name, ?target_ref, "successfully reconciled");
 
-    // TODO(mkm): make requeue duration configurable
-    Ok(Action::requeue(Duration::from_secs(5)))
+    requeue_after!()
+}
+
+async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
+    let name = sinker.name_any();
+    info!(?name, "running reconciler");
+
+    debug!(?sinker.spec, "got");
+    let local_ns = sinker.namespace().ok_or(Error::NamespaceRequired)?;
+
+    match sinker {
+        sinker if sinker.has_been_deleted() => {
+            reconcile_deleted_resource(sinker, ctx, &name, &local_ns).await
+        }
+        sinker if !sinker.has_target_finalizer() => {
+            add_target_finalizer(sinker, ctx, &name, &local_ns).await
+        }
+        _ => {
+            reconcile_normally(sinker, ctx, &name, &local_ns).await
+        }
+    }
 }
 
 // copies data, annotations and labels from source
@@ -366,9 +478,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::resources::{Mapping, ResourceSyncSpec};
     use kube::core::{ApiResource, GroupVersionKind};
+
+    use crate::resources::{Mapping, ResourceSyncSpec};
+
+    use super::*;
 
     #[tokio::test]
     async fn test_get_ar_from_subtree() {
