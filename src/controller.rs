@@ -4,7 +4,7 @@ use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::api::DeleteParams;
-use kube::api::Patch::{Merge, Strategic};
+use kube::api::Patch::Merge;
 use kube::{
     api::{ListParams, Patch, PatchParams},
     core::{DynamicObject, GroupVersionKind, ObjectMeta},
@@ -150,8 +150,8 @@ impl ResourceSync {
 async fn reconcile_deleted_resource(
     sinker: Arc<ResourceSync>,
     ctx: Arc<Context>,
-    name: &String,
-    local_ns: &String,
+    name: &str,
+    local_ns: &str,
 ) -> Result<Action> {
     if !sinker.has_target_finalizer() {
         // We have already removed our finalizer, so nothing more needs to be done
@@ -199,8 +199,8 @@ async fn reconcile_deleted_resource(
 async fn add_target_finalizer(
     sinker: Arc<ResourceSync>,
     ctx: Arc<Context>,
-    name: &String,
-    local_ns: &String,
+    name: &str,
+    _local_ns: &str,
 ) -> Result<Action> {
     let api = sinker.api(ctx);
     // TODO: Need to try to handle situations where multiple finalizers may be present
@@ -220,7 +220,7 @@ async fn reconcile_normally(
     sinker: Arc<ResourceSync>,
     ctx: Arc<Context>,
     name: &String,
-    local_ns: &String,
+    local_ns: &str,
 ) -> Result<Action> {
     let NamespacedApi { api, .. } =
         api_for(&sinker.spec.source, local_ns, Arc::clone(&ctx)).await?;
@@ -388,24 +388,26 @@ fn apply_mappings(
     Ok(template)
 }
 
+fn map_conversion(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Option<BTreeMap<String, String>> {
+    Some(
+        map.iter()
+            .map(|(k, v)| (k.to_string(), v.as_str().unwrap().to_string()))
+            .collect::<BTreeMap<String, String>>(),
+    )
+}
+
 // extract metadata that we can set on a DynamicObject from a serde_json value subtree.
 fn convert_metadata(subtree: &serde_json::Value) -> ObjectMeta {
     let mut metadata = ObjectMeta {
         ..Default::default()
     };
     if let serde_json::Value::Object(map) = &subtree["annotations"] {
-        metadata.annotations = Some(
-            map.iter()
-                .map(|(k, v)| (k.to_string(), v.as_str().unwrap().to_string()))
-                .collect::<BTreeMap<String, String>>(),
-        );
+        metadata.annotations = map_conversion(map);
     }
     if let serde_json::Value::Object(map) = &subtree["labels"] {
-        metadata.labels = Some(
-            map.iter()
-                .map(|(k, v)| (k.to_string(), v.as_str().unwrap().to_string()))
-                .collect::<BTreeMap<String, String>>(),
-        );
+        metadata.labels = map_conversion(map);
     }
     metadata
 }
@@ -472,7 +474,7 @@ pub async fn run(client: Client) -> Result<()> {
     Controller::new(docs, watcher::Config::default().any_semantic())
         .shutdown_on_signal()
         .run(reconcile, error_policy, Arc::new(Context { client }))
-        .filter_map(|x| async move { std::result::Result::ok(x) })
+        .filter_map(|x| async move { Result::ok(x) })
         .for_each(|_| futures::future::ready(()))
         .await;
 
@@ -510,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ar_from_subtree() {
-        let subtree = &serde_json::json!({
+        let subtree = &json!({
             "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": { "name": "test-sinker-container" },
@@ -527,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ar_from_subtree_nogroup() {
-        let subtree = &serde_json::json!({
+        let subtree = &json!({
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": { "name": "test-config-map-1" },
@@ -567,7 +569,7 @@ mod tests {
             },
         );
         let dynamic_sc: DynamicObject = serde_json::from_str(
-            &serde_json::to_string(&serde_json::json!({
+            &serde_json::to_string(&json!({
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": { "name": "test-configmap-1" },
@@ -578,7 +580,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": {
@@ -632,7 +634,7 @@ mod tests {
             },
         );
         let dynamic_sc: DynamicObject = serde_json::from_str(
-            &serde_json::to_string(&serde_json::json!({
+            &serde_json::to_string(&json!({
                 "apiVersion": "rbac.authorization.k8s.io/v1",
                 "kind": "ClusterRole",
                 "metadata": { "name": "test-clusterrole-1" },
@@ -641,7 +643,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "rbac.authorization.k8s.io/v1",
             "kind": "ClusterRole",
             "metadata": {
@@ -696,7 +698,7 @@ mod tests {
             },
         );
         let dynamic_sc: DynamicObject = serde_json::from_str(
-            &serde_json::to_string(&serde_json::json!({
+            &serde_json::to_string(&json!({
                 "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": { "name": "test-sinker-container-1" },
@@ -709,7 +711,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": {
@@ -775,7 +777,7 @@ mod tests {
             },
         );
         let dynamic_sc: DynamicObject = serde_json::from_str(
-            &serde_json::to_string(&serde_json::json!({
+            &serde_json::to_string(&json!({
                 "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": {
@@ -791,7 +793,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": {
@@ -856,7 +858,7 @@ mod tests {
             version: "v1".to_string(),
             kind: "ConfigMap".to_string(),
         });
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": {
@@ -874,7 +876,7 @@ mod tests {
             },
         });
         let dynamic_sc: DynamicObject = serde_json::from_str(
-            &serde_json::to_string(&serde_json::json!({
+            &serde_json::to_string(&json!({
                 "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": { "name": "test-sinker-container" },
@@ -940,7 +942,7 @@ mod tests {
             version: "v1".to_string(),
             kind: "ClusterRole".to_string(),
         });
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "rbac.authorization.k8s.io/v1",
             "kind": "ClusterRole",
             "metadata": {
@@ -950,7 +952,7 @@ mod tests {
             "rules": [],
         });
         let dynamic_sc: DynamicObject = serde_json::from_str(
-            &serde_json::to_string(&serde_json::json!({
+            &serde_json::to_string(&json!({
                 "apiVersion": "sinker.influxdata.io/v1alpha1",
                 "kind": "SinkerContainer",
                 "metadata": { "name": "test-sinker-container" },
@@ -1012,7 +1014,7 @@ mod tests {
             version: "v1alpha1".to_string(),
             kind: "SinkerContainer".to_string(),
         });
-        let source_dep = serde_json::json!({
+        let source_dep = json!({
             "apiVersion": "v1",
             "kind": "Deployment",
             "metadata": {
@@ -1032,15 +1034,14 @@ mod tests {
                 "isgood": true,
             },
         });
-        let expected = serde_json::json!({
+        let expected = json!({
             "apiVersion": "sinker.influxdata.io/v1alpha1",
             "kind": "SinkerContainer",
             "metadata": { "name": "test-sinker-container", "namespace": "default" },
             "spec": source_dep,
         });
         let dynamic_sc: DynamicObject =
-            serde_json::from_str(&serde_json::to_string(&serde_json::json!(source_dep)).unwrap())
-                .unwrap();
+            serde_json::from_str(&serde_json::to_string(&json!(source_dep)).unwrap()).unwrap();
         let target = apply_mappings(
             &dynamic_sc,
             &resource_sync.spec.target.resource_ref,
