@@ -145,6 +145,38 @@ impl ResourceSync {
             Some(ns) => Api::namespaced(ctx.client.clone(), &ns),
         }
     }
+
+    fn finalizers_clone_or_empty(&self) -> Vec<String> {
+        match self.metadata.finalizers.as_ref() {
+            Some(f) => f.clone(),
+            None => vec![],
+        }
+    }
+}
+
+trait WithItemRemoved<T> {
+    fn with_item_removed(self, item: &T) -> Self;
+}
+
+impl<T> WithItemRemoved<T> for Vec<T>
+where
+    T: PartialEq,
+{
+    fn with_item_removed(mut self, item: &T) -> Self {
+        self.retain(|i| i != item);
+        self
+    }
+}
+
+trait WithItemAdded<T> {
+    fn with_push(self, item: T) -> Self;
+}
+
+impl<T> WithItemAdded<T> for Vec<T> {
+    fn with_push(mut self, item: T) -> Self {
+        self.push(item);
+        self
+    }
 }
 
 async fn reconcile_deleted_resource(
@@ -176,11 +208,14 @@ async fn reconcile_deleted_resource(
             requeue_after!()
         }
         Err(kube::Error::Api(err)) if err.code == 404 => {
-            // TODO: Need to try to handle situations where multiple finalizers may be present
+            let patched_finalizers = sinker
+                .finalizers_clone_or_empty()
+                .with_item_removed(&FINALIZER.to_string());
+
             // Target has been deleted, remove the finalizer from the ResourceSync
             let patch = Merge(json!({
                 "metadata": {
-                    "finalizers": [],
+                    "finalizers": patched_finalizers,
                 },
             }));
 
@@ -202,14 +237,17 @@ async fn add_target_finalizer(
     name: &str,
     _local_ns: &str,
 ) -> Result<Action> {
-    let api = sinker.api(ctx);
-    // TODO: Need to try to handle situations where multiple finalizers may be present
+    let patched_finalizers = sinker
+        .finalizers_clone_or_empty()
+        .with_push(FINALIZER.to_string());
+
     let patch = Merge(json!({
         "metadata": {
-            "finalizers": [FINALIZER],
+            "finalizers": patched_finalizers,
         },
     }));
 
+    let api = sinker.api(ctx);
     api.patch(name, &PatchParams::default(), &patch).await?;
 
     // For now we are watching all events for the ResourceSync, so the patch will trigger a reconcile
