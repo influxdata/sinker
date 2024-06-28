@@ -20,10 +20,13 @@ use serde_json_path::JsonPath;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
 
+use util::{WithItemAdded, WithItemRemoved};
+
 use crate::{
     mapping::set_field_path,
+    requeue_after,
     resources::{ClusterRef, ClusterResourceRef, Mapping, ResourceSync, GVKN},
-    Error, Result, FINALIZER,
+    util, Error, Result, FINALIZER,
 };
 
 struct Context {
@@ -116,67 +119,6 @@ async fn api_for(
     };
 
     Ok(NamespacedApi { api, ar, namespace })
-}
-
-macro_rules! requeue_after {
-    ($duration:expr) => {
-        Ok(Action::requeue(Duration::from_secs($duration)))
-    };
-    () => {
-        Ok(Action::requeue(Duration::from_secs(5)))
-    };
-}
-
-impl ResourceSync {
-    fn has_been_deleted(&self) -> bool {
-        self.metadata.deletion_timestamp.is_some()
-    }
-
-    fn has_target_finalizer(&self) -> bool {
-        self.metadata
-            .finalizers
-            .as_ref()
-            .map_or(false, |f| f.contains(&FINALIZER.to_string()))
-    }
-
-    fn api(&self, ctx: Arc<Context>) -> Api<Self> {
-        match self.namespace() {
-            None => Api::all(ctx.client.clone()),
-            Some(ns) => Api::namespaced(ctx.client.clone(), &ns),
-        }
-    }
-
-    fn finalizers_clone_or_empty(&self) -> Vec<String> {
-        match self.metadata.finalizers.as_ref() {
-            Some(f) => f.clone(),
-            None => vec![],
-        }
-    }
-}
-
-trait WithItemRemoved<T> {
-    fn with_item_removed(self, item: &T) -> Self;
-}
-
-impl<T> WithItemRemoved<T> for Vec<T>
-where
-    T: PartialEq,
-{
-    fn with_item_removed(mut self, item: &T) -> Self {
-        self.retain(|i| i != item);
-        self
-    }
-}
-
-trait WithItemAdded<T> {
-    fn with_push(self, item: T) -> Self;
-}
-
-impl<T> WithItemAdded<T> for Vec<T> {
-    fn with_push(mut self, item: T) -> Self {
-        self.push(item);
-        self
-    }
 }
 
 async fn reconcile_deleted_resource(
