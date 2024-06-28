@@ -125,6 +125,6 @@ async fn api_for(
 
 impl ClusterResourceRef {
     pub async fn api_for(&self, ctx: Arc<Context>, local_ns: &str) -> crate::Result<NamespacedApi> {
-        api_for(&self, &local_ns, Arc::clone(&ctx)).await
+        api_for(self, local_ns, Arc::clone(&ctx)).await
     }
 }
