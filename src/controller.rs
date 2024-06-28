@@ -29,8 +29,8 @@ use crate::{
     util, Error, Result, FINALIZER,
 };
 
-struct Context {
-    client: Client,
+pub struct Context {
+    pub client: Client,
 }
 
 #[cfg(deleteme)]
