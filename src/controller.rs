@@ -22,6 +22,7 @@ use tracing::{debug, error, info, warn};
 
 use util::{WithItemAdded, WithItemRemoved};
 
+use crate::resource_extensions::NamespacedApi;
 use crate::{
     mapping::set_field_path,
     requeue_after,
@@ -43,108 +44,29 @@ async fn resource_fetcher(
     Ok(())
 }
 
-async fn cluster_client(
-    cluster_ref: Option<&ClusterRef>,
-    local_ns: &str,
-    ctx: Arc<Context>,
-) -> Result<Client> {
-    let client = match cluster_ref {
-        None => ctx.client.clone(),
-        Some(cluster_ref) => {
-            let secrets: Api<Secret> = Api::namespaced(ctx.client.clone(), local_ns);
-            let secret_ref = &cluster_ref.kube_config.secret_ref;
-            let sec = secrets.get(&secret_ref.name).await?;
-
-            let kube_config = kube::config::Kubeconfig::from_yaml(
-                std::str::from_utf8(&sec.data.unwrap().get(&secret_ref.key).unwrap().0)
-                    .map_err(Error::KubeconfigUtf8Error)?,
-            )?;
-            let mut config =
-                Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
-
-            if let Some(ref namespace) = cluster_ref.namespace {
-                config.default_namespace = namespace.clone();
-            }
-
-            debug!(?config.cluster_url, "connecting to remote cluster");
-            let remote_client = kube::Client::try_from(config)?;
-            let version = remote_client.apiserver_version().await?;
-            debug!(?version, "remote cluster version");
-
-            remote_client
-        }
-    };
-    Ok(client)
-}
-
-/// An `Api` struct already contains the namespace but it doesn't expose an accessor for it.
-/// This struct preserves a copy of the namespace we pass to the `Api` constructor when we create it.
-struct NamespacedApi {
-    api: Api<DynamicObject>,
-    ar: ApiResource,
-    namespace: Option<String>,
-}
-
-async fn api_for(
-    cluster_resource_ref: &ClusterResourceRef,
-    local_ns: &str,
-    ctx: Arc<Context>,
-) -> Result<NamespacedApi> {
-    let cluster_ref = cluster_resource_ref.cluster.as_ref();
-    let client = cluster_client(cluster_ref, local_ns, ctx).await?;
-
-    let resource_ref = &cluster_resource_ref.resource_ref;
-    let (ar, _) = discovery::pinned_kind(&client, &resource_ref.try_into()?).await?;
-
-    // if cluster_ref is a remote cluster and we don't specify a namespace in
-    // the config, use the default for that client.
-    // if cluster_ref is local, use local_ns.
-    let (api, namespace) = match cluster_ref {
-        Some(cluster) => match &cluster.namespace {
-            Some(namespace) => (
-                Api::namespaced_with(client.clone(), namespace, &ar),
-                Some(namespace.to_owned()),
-            ),
-            None => (
-                // assume cluster-scoped resource.
-                // TODO: should someday handle "default namespace for the kubeconfig being used"
-                Api::all_with(client.clone(), &ar),
-                None,
-            ),
-        },
-        None => (
-            Api::namespaced_with(client.clone(), local_ns, &ar),
-            Some(local_ns.to_owned()),
-        ),
-    };
-
-    Ok(NamespacedApi { api, ar, namespace })
-}
-
 async fn reconcile_deleted_resource(
     sinker: Arc<ResourceSync>,
-    ctx: Arc<Context>,
     name: &str,
-    local_ns: &str,
+    target_api: NamespacedApi,
+    parent_api: Api<ResourceSync>,
 ) -> Result<Action> {
     if !sinker.has_target_finalizer() {
         // We have already removed our finalizer, so nothing more needs to be done
         return Ok(Action::await_change());
     }
 
-    let NamespacedApi { api, .. } =
-        api_for(&sinker.spec.target, local_ns, Arc::clone(&ctx)).await?;
-
     let target_name = &sinker.spec.target.resource_ref.name;
 
-    match api.get(target_name).await {
+    match target_api.get(target_name).await {
         Ok(target) if target.metadata.deletion_timestamp.is_some() => {
             // Target is being deleted, wait for it to be deleted
             // For now we need a requeue after, but in the future we should try to watch the target if we can
             requeue_after!()
         }
         Ok(_) => {
-            api.delete(target_name, &DeleteParams::foreground()).await?;
+            target_api
+                .delete(target_name, &DeleteParams::foreground())
+                .await?;
             // Deleted target, wait for it to be deleted
             // For now we need a requeue after, but in the future we should try to watch the target if we can
             requeue_after!()
@@ -161,8 +83,7 @@ async fn reconcile_deleted_resource(
                 },
             }));
 
-            sinker
-                .api(ctx)
+            parent_api
                 .patch(name, &PatchParams::default(), &patch)
                 .await?;
 
@@ -175,9 +96,8 @@ async fn reconcile_deleted_resource(
 
 async fn add_target_finalizer(
     sinker: Arc<ResourceSync>,
-    ctx: Arc<Context>,
     name: &str,
-    _local_ns: &str,
+    parent_api: Api<ResourceSync>,
 ) -> Result<Action> {
     let patched_finalizers = sinker
         .finalizers_clone_or_empty()
@@ -189,8 +109,9 @@ async fn add_target_finalizer(
         },
     }));
 
-    let api = sinker.api(ctx);
-    api.patch(name, &PatchParams::default(), &patch).await?;
+    parent_api
+        .patch(name, &PatchParams::default(), &patch)
+        .await?;
 
     // For now we are watching all events for the ResourceSync, so the patch will trigger a reconcile
     Ok(Action::await_change())
@@ -198,33 +119,29 @@ async fn add_target_finalizer(
 
 async fn reconcile_normally(
     sinker: Arc<ResourceSync>,
-    ctx: Arc<Context>,
-    name: &String,
-    local_ns: &str,
+    name: &str,
+    source_api: NamespacedApi,
+    target_api: NamespacedApi,
 ) -> Result<Action> {
-    let NamespacedApi { api, .. } =
-        api_for(&sinker.spec.source, local_ns, Arc::clone(&ctx)).await?;
-    let source = api.get(&sinker.spec.source.resource_ref.name).await?;
+    let target_namespace = &target_api.namespace;
+    let target_ar = &target_api.ar;
+
+    let source = source_api
+        .get(&sinker.spec.source.resource_ref.name)
+        .await?;
     debug!(?source, "got source object");
 
     let target_ref = &sinker.spec.target.resource_ref;
-    let NamespacedApi {
-        api,
-        ar,
-        namespace: target_namespace,
-    } = api_for(&sinker.spec.target, local_ns, Arc::clone(&ctx)).await?;
-
-    debug!(?target_namespace, "got client for target");
 
     let target = {
         let mut target = if sinker.spec.mappings.is_empty() {
-            clone_resource(&source, target_ref, target_namespace.as_deref(), &ar)?
+            clone_resource(&source, target_ref, target_namespace.as_deref(), target_ar)?
         } else {
             apply_mappings(
                 &source,
                 target_ref,
                 target_namespace.as_deref(),
-                &ar,
+                target_ar,
                 &sinker,
             )?
         };
@@ -250,7 +167,8 @@ async fn reconcile_normally(
     debug!(?target, "produced target object");
 
     let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
-    api.patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
+    target_api
+        .patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
 
     info!(?name, ?target_ref, "successfully reconciled");
@@ -265,14 +183,26 @@ async fn reconcile(sinker: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Actio
     debug!(?sinker.spec, "got");
     let local_ns = sinker.namespace().ok_or(Error::NamespaceRequired)?;
 
+    let target_api = sinker
+        .spec
+        .target
+        .api_for(Arc::clone(&ctx), &local_ns)
+        .await?;
+    let source_api = sinker
+        .spec
+        .source
+        .api_for(Arc::clone(&ctx), &local_ns)
+        .await?;
+    let parent_api = sinker.api(Arc::clone(&ctx));
+
     match sinker {
         sinker if sinker.has_been_deleted() => {
-            reconcile_deleted_resource(sinker, ctx, &name, &local_ns).await
+            reconcile_deleted_resource(sinker, &name, target_api, parent_api).await
         }
         sinker if !sinker.has_target_finalizer() => {
-            add_target_finalizer(sinker, ctx, &name, &local_ns).await
+            add_target_finalizer(sinker, &name, parent_api).await
         }
-        _ => reconcile_normally(sinker, ctx, &name, &local_ns).await,
+        _ => reconcile_normally(sinker, &name, source_api, target_api).await,
     }
 }
 
