@@ -29,6 +29,10 @@ serde_json = "1"
 serde_yaml = "0.9.34"
 thiserror = "1"
 serde_json_path = "0.6.7"
+async-trait = "0.1.*"
 
 [dev-dependencies]
 rstest = "0.17.0"
+mockall = "0.12.*"
+kube-core = "0.85.0"
+random-string = "1.1.0"

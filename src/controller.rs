@@ -1,5 +1,7 @@
+use std::fmt::Debug;
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::api::DeleteParams;
@@ -12,6 +14,8 @@ use kube::{
     },
     Api, Client, Resource, ResourceExt,
 };
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::json;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
@@ -24,6 +28,35 @@ use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZ
 
 pub struct Context {
     pub client: Client,
+}
+
+#[async_trait]
+trait KubeApi<K: Clone + DeserializeOwned + Debug + Send + Sync, P: Serialize + Debug + Send + Sync>
+where
+    Self: Sync + Send,
+{
+    async fn do_patch(
+        &self,
+        name: &str,
+        pp: &PatchParams,
+        patch: &Patch<P>,
+    ) -> kubert::client::Result<K>;
+}
+
+#[async_trait]
+impl<K, P> KubeApi<K, P> for Api<K>
+where
+    K: Clone + DeserializeOwned + Debug + Send + Sync,
+    P: Serialize + Debug + Send + Sync,
+{
+    async fn do_patch(
+        &self,
+        name: &str,
+        pp: &PatchParams,
+        patch: &Patch<P>,
+    ) -> kubert::client::Result<K> {
+        self.patch(name, pp, patch).await
+    }
 }
 
 async fn reconcile_deleted_resource(
@@ -79,7 +112,7 @@ async fn reconcile_deleted_resource(
 async fn add_target_finalizer(
     resource_sync: Arc<ResourceSync>,
     name: &str,
-    parent_api: Api<ResourceSync>,
+    parent_api: Box<dyn KubeApi<ResourceSync, serde_json::Value>>,
 ) -> Result<Action> {
     let patched_finalizers = resource_sync
         .finalizers_clone_or_empty()
@@ -92,7 +125,7 @@ async fn add_target_finalizer(
     }));
 
     parent_api
-        .patch(name, &PatchParams::default(), &patch)
+        .do_patch(name, &PatchParams::default(), &patch)
         .await?;
 
     // For now we are watching all events for the ResourceSync, so the patch will trigger a reconcile
@@ -190,7 +223,7 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
             reconcile_deleted_resource(resource_sync, &name, target_api, parent_api).await
         }
         resource_sync if !resource_sync.has_target_finalizer() => {
-            add_target_finalizer(resource_sync, &name, parent_api).await
+            add_target_finalizer(resource_sync, &name, Box::new(parent_api)).await
         }
         _ => reconcile_normally(resource_sync, &name, source_api, target_api).await,
     }
@@ -220,4 +253,79 @@ pub async fn run(client: Client) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use core::fmt::Debug;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use kube::api::{Patch, PatchParams};
+    use kube::runtime::controller::Action;
+    use mockall::predicate::always;
+    use mockall::{mock, predicate};
+    use random_string::charsets::ALPHA_LOWER;
+    use random_string::generate_rng;
+    use serde::de::DeserializeOwned;
+    use serde_json::json;
+
+    use crate::controller::{add_target_finalizer, KubeApi};
+    use crate::resources::{ResourceSync, ResourceSyncSpec};
+    use crate::FINALIZER;
+
+    mock! {
+         pub Api<K> {}
+         #[async_trait]
+         impl<K> KubeApi<K, serde_json::Value> for Api<K>
+         where
+             K: Clone + DeserializeOwned + Debug + Send + Sync,
+         {
+             async fn do_patch(
+                 &self,
+                 name: &str,
+                 pp: &PatchParams,
+                 patch: &Patch<serde_json::Value>,
+             ) -> kubert::client::Result<K>;
+         }
+    }
+
+    #[tokio::test]
+    async fn test_add_target_finalizer() {
+        let name = generate_rng(1..10, ALPHA_LOWER);
+        let other_finalizer = &generate_rng(1..10, ALPHA_LOWER);
+
+        let resource_sync = {
+            let mut resource_sync = ResourceSync::new(&name, ResourceSyncSpec::default());
+            _ = resource_sync
+                .metadata
+                .finalizers
+                .insert(vec![other_finalizer.clone()]);
+
+            resource_sync
+        };
+
+        let parent_api = {
+            let mut parent_api: MockApi<ResourceSync> = MockApi::new();
+            parent_api
+                .expect_do_patch()
+                .with(
+                    predicate::eq(name.clone()),
+                    always(),
+                    predicate::eq(Patch::Merge(json!(
+                            {
+                                "metadata": {
+                                    "finalizers": [other_finalizer, FINALIZER],
+                                },
+                            }
+                    ))),
+                )
+                .returning(|_, _, _| Ok(ResourceSync::new("", ResourceSyncSpec::default())))
+                .once();
+
+            parent_api
+        };
+
+        let action = add_target_finalizer(Arc::from(resource_sync), &name, Box::new(parent_api))
+            .await
+            .unwrap();
+        assert_eq!(action, Action::await_change());
+    }
+}
