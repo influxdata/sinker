@@ -77,7 +77,7 @@ impl From<&GVKN> for TypeMeta {
 impl TryFrom<&GVKN> for GroupVersionKind {
     type Error = ParseGroupVersionError;
 
-    fn try_from(value: &GVKN) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &GVKN) -> Result<Self, Self::Error> {
         let type_meta: TypeMeta = value.into();
         type_meta.try_into()
     }
