@@ -248,7 +248,8 @@ mod tests {
         "status.foo.bar",
         r#"{"spec":{},"status":{"keep":1,"foo":{"bar":"demo"}}}"#
     )]
-    fn test_add_to_path(#[case] path: &str, #[case] expected: &str) {
+    #[tokio::test]
+    async fn test_add_to_path(#[case] path: &str, #[case] expected: &str) {
         let mut root = json!({ "spec": {}, "status": {"keep": 1} });
         set_field_path(
             &mut root,
