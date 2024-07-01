@@ -32,4 +32,3 @@ serde_json_path = "0.6.7"
 
 [dev-dependencies]
 rstest = "0.17.0"
-mockall = "0.12.*"
