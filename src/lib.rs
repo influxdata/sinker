@@ -1,5 +1,7 @@
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::bare_urls, rust_2018_idioms)]
 
+const FINALIZER: &str = "sinker.influxdata.io/target";
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Kube Error: {0}")]
@@ -19,6 +21,12 @@ pub enum Error {
 
     #[error("JsonPathError: {0}")]
     JsonPathError(#[from] serde_json_path::ParseError),
+
+    #[error("Name is required")]
+    NameRequired,
+
+    #[error("UID is required")]
+    UIDRequired,
 
     #[error("Namespace is required")]
     NamespaceRequired,
@@ -45,4 +53,6 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub mod controller;
 
 mod mapping;
+mod resource_extensions;
 pub mod resources;
+mod util;
