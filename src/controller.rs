@@ -173,7 +173,7 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     debug!(?resource_sync.spec, "got");
     let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
 
-    // TODO: If a CDC is deleted using foreground propagation this could cause the cluster to be deleted or unreachable before we have a chance to clean up the resource(s) owned by the ResourceSync, we should be able to detect and handle this scenario gracefully
+    // TODO: Until CDC finalizer is implemented (and even after that if a CDC is deleted using foreground propagation) this could cause the cluster to be deleted or unreachable before we have a chance to clean up the resource(s) owned by the ResourceSync, we should be able to detect and handle this scenario gracefully
 
     let target_api = resource_sync
         .spec
