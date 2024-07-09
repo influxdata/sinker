@@ -52,6 +52,10 @@ impl RemoteWatcher {
 
     pub async fn run(&self, ctx: Arc<Context>) {
         while let Err(err) = self.start(Arc::clone(&ctx)).await {
+            if *self.canceled.read().unwrap() {
+                break;
+            }
+
             self.send_reconcile();
             retry_sleep!("Error starting watch on remote object: {}", err);
         }
