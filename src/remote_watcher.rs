@@ -100,13 +100,13 @@ impl RemoteWatcher {
         while !*self.canceled.read().unwrap() {
             let mut stream = api.watch(&watch_params, &resource_version).await?.boxed();
 
+            // TODO: Need to only send here when we are not the ones who touched it last
             while let Some(event) = stream.try_next().await? {
                 match event {
                     WatchEvent::Added(obj) => {
                         resource_version = self.send(obj)?;
                     }
                     WatchEvent::Modified(obj) => {
-                        // TODO: Need to only send here when we are not the ones who modified it
                         resource_version = self.send(obj)?;
                     }
                     WatchEvent::Deleted(obj) => {
