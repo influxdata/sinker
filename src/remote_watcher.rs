@@ -78,6 +78,9 @@ impl RemoteWatcher {
             .resource_version
             .ok_or(Error::ResourceVersionRequired)?;
 
+        // Send a reconcile once in case something changed before the rv we are watching from
+        self.send_reconcile();
+
         self.watch(&api, object_name, &resource_version).await
     }
 
