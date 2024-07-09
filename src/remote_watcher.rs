@@ -106,6 +106,7 @@ impl RemoteWatcher {
                         resource_version = self.send(obj)?;
                     }
                     WatchEvent::Modified(obj) => {
+                        // TODO: Need to only send here when we are not the ones who modified it
                         resource_version = self.send(obj)?;
                     }
                     WatchEvent::Deleted(obj) => {
