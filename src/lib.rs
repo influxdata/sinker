@@ -31,6 +31,9 @@ pub enum Error {
     #[error("Namespace is required")]
     NamespaceRequired,
 
+    #[error("Failed to acquire ResourceVersion")]
+    ResourceVersionRequired,
+
     #[error(transparent)]
     AddToPathError(#[from] mapping::AddToPathError),
 
