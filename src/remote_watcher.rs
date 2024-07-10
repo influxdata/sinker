@@ -1,5 +1,4 @@
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{StreamExt, TryStreamExt};
@@ -7,6 +6,8 @@ use kube::api::{DynamicObject, WatchParams};
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
 use kube::Resource;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::error;
 
@@ -44,17 +45,19 @@ impl RemoteWatcher {
         }
     }
 
-    pub fn cancel(&mut self) {
-        *self.canceled.write().unwrap() = true;
+    pub async fn cancel(&mut self) {
+        *self.canceled.write().await = true;
     }
 
     fn send_reconcile(&self) {
-        let _ = self.sender.send(self.key.resource_sync.clone());
+        if let Err(err) = self.sender.blocking_send(self.key.resource_sync.clone()) {
+            error!("Error sending reconcile: {}", err);
+        }
     }
 
     pub async fn run(&self, ctx: Arc<Context>) {
         while let Err(err) = self.start(Arc::clone(&ctx)).await {
-            if *self.canceled.read().unwrap() {
+            if *self.canceled.read().await {
                 break;
             }
 
@@ -99,7 +102,7 @@ impl RemoteWatcher {
         let watch_params = WatchParams::default().fields(&format!("metadata.name={}", object_name));
         let mut resource_version = resource_version.to_string();
 
-        while !*self.canceled.read().unwrap() {
+        while !*self.canceled.read().await {
             let mut stream = api.watch(&watch_params, &resource_version).await?.boxed();
 
             while let Some(event) = stream.try_next().await? {
