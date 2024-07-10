@@ -94,7 +94,7 @@ impl RemoteWatcher {
         object_name: &str,
         resource_version: &str,
     ) -> Result<()> {
-        let watch_params = WatchParams::default().labels(&format!("metadata.name={}", object_name));
+        let watch_params = WatchParams::default().fields(&format!("metadata.name={}", object_name));
         let mut resource_version = resource_version.to_string();
 
         while !*self.canceled.read().unwrap() {
