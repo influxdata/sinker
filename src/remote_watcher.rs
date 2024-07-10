@@ -36,6 +36,8 @@ macro_rules! retry_sleep {
     };
 }
 
+// TODO: Change sender types so errors can be passed up and type should be a full object
+
 impl RemoteWatcher {
     pub fn new(key: RemoteWatcherKey, sender: Sender<ObjectRef<ResourceSync>>) -> Self {
         Self {
