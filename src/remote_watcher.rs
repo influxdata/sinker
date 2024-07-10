@@ -6,10 +6,12 @@ use futures::{StreamExt, TryStreamExt};
 use kube::api::{DynamicObject, WatchParams};
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
+use kube::Resource;
 use tokio::time::sleep;
 use tracing::error;
 
 use crate::controller::Context;
+use crate::filters::Filterable;
 use crate::resource_extensions::NamespacedApi;
 use crate::resources::{ClusterResourceRef, ResourceSync};
 use crate::{Error, Result};
@@ -128,7 +130,9 @@ impl RemoteWatcher {
     }
 
     fn send(&self, obj: DynamicObject) -> Result<String> {
-        self.send_reconcile();
+        obj.was_last_modified_by(&ResourceSync::group(&()))
+            .is_some_and(|was| was)
+            .then(|| self.send_reconcile());
         obj.metadata
             .resource_version
             .ok_or(Error::ResourceVersionRequired)
