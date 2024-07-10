@@ -55,6 +55,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Expose all controller components used by main
 pub mod controller;
 
+mod filters;
 mod mapping;
 mod remote_watcher;
 mod resource_extensions;
