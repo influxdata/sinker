@@ -31,6 +31,7 @@ thiserror = "1"
 serde_json_path = "0.6.7"
 rand = "0.8.5"
 backoff = "0.4.*"
+tokio-context = "0.1.*"
 
 [dev-dependencies]
 rstest = "0.17.0"

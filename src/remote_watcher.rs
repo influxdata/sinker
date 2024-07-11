@@ -9,8 +9,9 @@ use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::RwLock;
 use tokio::time::sleep;
+use tokio_context::context::Context as TokioContext;
+use tokio_context::context::RefContext;
 use tracing::error;
 
 use crate::controller::Context;
@@ -28,7 +29,6 @@ pub struct RemoteWatcherKey {
 pub struct RemoteWatcher {
     key: RemoteWatcherKey,
     sender: Sender<ObjectRef<ResourceSync>>,
-    canceled: Arc<RwLock<bool>>,
 }
 
 macro_rules! send_reconcile_on_fail {
@@ -41,15 +41,7 @@ macro_rules! send_reconcile_on_fail {
 
 impl RemoteWatcher {
     pub fn new(key: RemoteWatcherKey, sender: Sender<ObjectRef<ResourceSync>>) -> Self {
-        Self {
-            key,
-            sender,
-            canceled: Arc::new(RwLock::new(false)),
-        }
-    }
-
-    pub async fn cancel(&mut self) {
-        *self.canceled.write().await = true;
+        Self { key, sender }
     }
 
     fn send_reconcile(&self) {
@@ -63,24 +55,35 @@ impl RemoteWatcher {
         self.send_reconcile();
     }
 
-    pub async fn run(&self, ctx: Arc<Context>) {
+    pub async fn run(&self, ctx: Arc<Context>, tctx: &RefContext) {
         let mut backoff = DefaultBackoff::default();
 
-        while let Err(err) = self.start(Arc::clone(&ctx), &mut backoff).await {
-            if *self.canceled.read().await {
-                break;
-            }
+        let (mut tctx_local, handle) = TokioContext::with_parent(tctx, None);
 
-            send_reconcile_on_fail!(
-                self,
-                &mut backoff,
-                "Error starting watch on remote object: {}",
-                err
-            );
+        loop {
+            tokio::select! {
+                _ = tctx_local.done() => {
+                    handle.cancel();
+                    return;
+                },
+                Err(err) = self.start(Arc::clone(&ctx), tctx, &mut backoff) => {
+                    send_reconcile_on_fail!(
+                        self,
+                        &mut backoff,
+                        "Error starting watch on remote object: {}",
+                        err
+                    );
+                }
+            }
         }
     }
 
-    async fn start(&self, ctx: Arc<Context>, backoff: &mut DefaultBackoff) -> Result<()> {
+    async fn start(
+        &self,
+        ctx: Arc<Context>,
+        tctx: &RefContext,
+        backoff: &mut DefaultBackoff,
+    ) -> Result<()> {
         let local_ns = self
             .key
             .resource_sync
@@ -104,7 +107,7 @@ impl RemoteWatcher {
         // Send a reconcile once in case something changed before the rv we are watching from
         self.send_reconcile_on_success(backoff);
 
-        self.watch(&api, object_name, &resource_version, backoff)
+        self.watch(&api, object_name, &resource_version, tctx, backoff)
             .await
     }
 
@@ -113,42 +116,51 @@ impl RemoteWatcher {
         api: &NamespacedApi,
         object_name: &str,
         resource_version: &str,
+        tctx: &RefContext,
         backoff: &mut DefaultBackoff,
     ) -> Result<()> {
+        let (mut tctx, handle) = TokioContext::with_parent(tctx, None);
+
         let watch_params = WatchParams::default().fields(&format!("metadata.name={}", object_name));
         let mut resource_version = resource_version.to_string();
 
-        while !*self.canceled.read().await {
-            let mut stream = api.watch(&watch_params, &resource_version).await?.boxed();
+        loop {
+            tokio::select! {
+                _ = tctx.done() => {
+                    handle.cancel();
+                    return Ok(());
+                },
+                stream = api.watch(&watch_params, &resource_version) => {
+                    let mut stream = stream?.boxed();
 
-            while let Some(event) = stream.try_next().await? {
-                match event {
-                    WatchEvent::Added(obj) => {
-                        resource_version = self.send(obj, backoff)?;
-                    }
-                    WatchEvent::Modified(obj) => {
-                        resource_version = self.send(obj, backoff)?;
-                    }
-                    WatchEvent::Deleted(obj) => {
-                        resource_version = self.send(obj, backoff)?;
-                    }
-                    WatchEvent::Bookmark(bookmark) => {
-                        self.send_reconcile_on_success(backoff);
-                        resource_version = bookmark.metadata.resource_version.clone();
-                    }
-                    WatchEvent::Error(err) => {
-                        send_reconcile_on_fail!(
-                            self,
-                            backoff,
-                            "Error watching remote object: {}",
-                            err
-                        );
+                    while let Some(event) = stream.try_next().await? {
+                        match event {
+                            WatchEvent::Added(obj) => {
+                                resource_version = self.send(obj, backoff)?;
+                            }
+                            WatchEvent::Modified(obj) => {
+                                resource_version = self.send(obj, backoff)?;
+                            }
+                            WatchEvent::Deleted(obj) => {
+                                resource_version = self.send(obj, backoff)?;
+                            }
+                            WatchEvent::Bookmark(bookmark) => {
+                                self.send_reconcile_on_success(backoff);
+                                resource_version = bookmark.metadata.resource_version.clone();
+                            }
+                            WatchEvent::Error(err) => {
+                                send_reconcile_on_fail!(
+                                    self,
+                                    backoff,
+                                    "Error watching remote object: {}",
+                                    err
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
-
-        Ok(())
     }
 
     fn send(&self, obj: DynamicObject, backoff: &mut DefaultBackoff) -> Result<String> {
