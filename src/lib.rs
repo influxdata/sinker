@@ -58,6 +58,7 @@ pub mod controller;
 mod filters;
 mod mapping;
 mod remote_watcher;
+mod remote_watcher_manager;
 mod resource_extensions;
 pub mod resources;
 mod util;
