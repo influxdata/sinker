@@ -4,6 +4,7 @@ use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
+use kube::runtime::{predicates, reflector, WatchStreamExt};
 use kube::{
     api::{ListParams, Patch, PatchParams},
     runtime::{
@@ -13,17 +14,20 @@ use kube::{
     Api, Client, Resource, ResourceExt,
 };
 use serde_json::json;
+use tokio_context::context::RefContext;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
 
 use util::{WithItemAdded, WithItemRemoved};
 
 use crate::mapping::{apply_mappings, clone_resource};
+use crate::remote_watcher_manager::RemoteWatcherManager;
 use crate::resource_extensions::NamespacedApi;
 use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZER};
 
 pub struct Context {
     pub client: Client,
+    pub remote_watcher_manager: RemoteWatcherManager,
 }
 
 async fn reconcile_deleted_resource(
@@ -180,14 +184,14 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     let target_api = resource_sync
         .spec
         .target
-        .api_for(Arc::clone(&ctx), &local_ns)
+        .api_for(ctx.client.clone(), &local_ns)
         .await?;
     let source_api = resource_sync
         .spec
         .source
-        .api_for(Arc::clone(&ctx), &local_ns)
+        .api_for(ctx.client.clone(), &local_ns)
         .await?;
-    let parent_api = resource_sync.api(Arc::clone(&ctx));
+    let parent_api = resource_sync.api(ctx.client.clone());
 
     match resource_sync {
         resource_sync if resource_sync.has_been_deleted() => {
@@ -200,6 +204,7 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     }
 }
 
+// TODO: Exponential Backoff using DefaultBackoff for watcher
 fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Context>) -> Action {
     let name = resource_sync.name_any();
     warn!(?name, %error, "reconcile failed");
@@ -213,12 +218,35 @@ pub async fn run(client: Client) -> Result<()> {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
         std::process::exit(1);
     }
-    Controller::new(docs, watcher::Config::default().any_semantic())
+
+    let (reader, writer) = reflector::store();
+    let resource_syncs = watcher(docs, watcher::Config::default().any_semantic())
+        .default_backoff()
+        .reflect(writer)
+        .applied_objects()
+        .predicate_filter(predicates::generation);
+
+    let (ctx, handle) = RefContext::new();
+
+    let (remote_watcher_manager, remote_objects_trigger) =
+        RemoteWatcherManager::new(ctx, client.clone());
+
+    Controller::for_stream(resource_syncs, reader)
+        .reconcile_on(remote_objects_trigger)
         .shutdown_on_signal()
-        .run(reconcile, error_policy, Arc::new(Context { client }))
+        .run(
+            reconcile,
+            error_policy,
+            Arc::new(Context {
+                client,
+                remote_watcher_manager,
+            }),
+        )
         .filter_map(|x| async move { Result::ok(x) })
         .for_each(|_| futures::future::ready(()))
         .await;
+
+    handle.cancel();
 
     Ok(())
 }
