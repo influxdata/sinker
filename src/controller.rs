@@ -35,6 +35,7 @@ async fn reconcile_deleted_resource(
     name: &str,
     target_api: NamespacedApi,
     parent_api: Api<ResourceSync>,
+    ctx: Arc<Context>,
 ) -> Result<Action> {
     if !resource_sync.has_target_finalizer() {
         // We have already removed our finalizer, so nothing more needs to be done
@@ -45,19 +46,24 @@ async fn reconcile_deleted_resource(
 
     match target_api.get(target_name).await {
         Ok(target) if target.metadata.deletion_timestamp.is_some() => {
-            // Target is being deleted, wait for it to be deleted
-            // For now we need a requeue after, but in the future we should try to watch the target if we can
-            requeue_after!()
+            resource_sync
+                .start_remote_watches_if_not_watching(ctx)
+                .await;
+            Ok(Action::await_change())
         }
         Ok(_) => {
             target_api
                 .delete(target_name, &DeleteParams::foreground())
                 .await?;
-            // Deleted target, wait for it to be deleted
-            // For now we need a requeue after, but in the future we should try to watch the target if we can
-            requeue_after!()
+
+            resource_sync
+                .start_remote_watches_if_not_watching(ctx)
+                .await;
+            Ok(Action::await_change())
         }
         Err(kube::Error::Api(err)) if err.code == 404 => {
+            resource_sync.stop_remote_watches_if_watching(ctx).await;
+
             let patched_finalizers = resource_sync
                 .finalizers_clone_or_empty()
                 .with_item_removed(&FINALIZER.to_string());
@@ -99,8 +105,7 @@ async fn add_target_finalizer(
         .patch(name, &PatchParams::default(), &patch)
         .await?;
 
-    // For now we are watching all events for the ResourceSync, so the patch will trigger a reconcile
-    Ok(Action::await_change())
+    requeue_after!()
 }
 
 async fn reconcile_normally(
@@ -108,6 +113,7 @@ async fn reconcile_normally(
     name: &str,
     source_api: NamespacedApi,
     target_api: NamespacedApi,
+    ctx: Arc<Context>,
 ) -> Result<Action> {
     let target_namespace = &target_api.namespace;
     let target_ar = &target_api.ar;
@@ -161,9 +167,13 @@ async fn reconcile_normally(
         .patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
 
+    resource_sync
+        .start_remote_watches_if_not_watching(ctx)
+        .await;
+
     info!(?name, ?target_ref, "successfully reconciled");
 
-    requeue_after!()
+    Ok(Action::await_change())
 }
 
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
@@ -195,12 +205,12 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
 
     match resource_sync {
         resource_sync if resource_sync.has_been_deleted() => {
-            reconcile_deleted_resource(resource_sync, &name, target_api, parent_api).await
+            reconcile_deleted_resource(resource_sync, &name, target_api, parent_api, ctx).await
         }
         resource_sync if !resource_sync.has_target_finalizer() => {
             add_target_finalizer(resource_sync, &name, parent_api).await
         }
-        _ => reconcile_normally(resource_sync, &name, source_api, target_api).await,
+        _ => reconcile_normally(resource_sync, &name, source_api, target_api, ctx).await,
     }
 }
 

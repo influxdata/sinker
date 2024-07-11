@@ -1,12 +1,25 @@
 use std::ops::Deref;
+use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{ApiResource, DynamicObject};
+use kube::runtime::reflector::ObjectRef;
 use kube::{discovery, Api, Client, Config, ResourceExt};
 use tracing::debug;
 
+use crate::controller::Context;
+use crate::remote_watcher::RemoteWatcherKey;
 use crate::resources::{ClusterRef, ClusterResourceRef, ResourceSync};
 use crate::{Error, FINALIZER};
+
+macro_rules! rs_watch {
+    ($fn_name:ident, $method:ident) => {
+        pub async fn $fn_name(&self, ctx: Arc<Context>) {
+            self.spec.source.$method(Arc::clone(&ctx), &self).await;
+            self.spec.target.$method(Arc::clone(&ctx), &self).await;
+        }
+    };
+}
 
 impl ResourceSync {
     pub fn has_been_deleted(&self) -> bool {
@@ -33,6 +46,34 @@ impl ResourceSync {
             None => vec![],
         }
     }
+
+    rs_watch!(
+        start_remote_watches_if_not_watching,
+        start_watch_if_not_watching
+    );
+    rs_watch!(stop_remote_watches_if_watching, stop_watch_if_watching);
+}
+
+macro_rules! crr_watch {
+    ($fn_name:ident, $method:ident) => {
+        pub async fn $fn_name(&self, ctx: Arc<Context>, resource_sync: &ResourceSync) {
+            ctx.remote_watcher_manager
+                .$method(&self.remote_watcher_key(resource_sync))
+                .await;
+        }
+    };
+}
+
+impl ClusterResourceRef {
+    fn remote_watcher_key(&self, resource_sync: &ResourceSync) -> RemoteWatcherKey {
+        RemoteWatcherKey {
+            object: self.clone(),
+            resource_sync: ObjectRef::from_obj(resource_sync),
+        }
+    }
+
+    crr_watch!(start_watch_if_not_watching, add_if_not_exists);
+    crr_watch!(stop_watch_if_watching, stop_and_remove_if_exists);
 }
 
 /// An `Api` struct already contains the namespace but it doesn't expose an accessor for it.
