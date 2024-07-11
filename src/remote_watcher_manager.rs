@@ -49,12 +49,12 @@ impl RemoteWatcherManager {
         let (tctx, handle) = RefContext::with_parent(&self.tctx, None);
         let watcher = RemoteWatcher::new(key.clone(), self.sender.clone(), tctx);
 
-        let join_handler = tokio::spawn(async move { watcher.run(ctx).await });
+        let join_handle = tokio::spawn(async move { watcher.run(ctx).await });
 
         self.watchers
             .write()
             .await
-            .insert(key.clone(), (handle, join_handler));
+            .insert(key.clone(), (handle, join_handle));
     }
 
     pub async fn stop_and_remove_if_exists(&self, key: &RemoteWatcherKey) {
