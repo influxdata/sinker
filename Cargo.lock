@@ -1717,6 +1717,7 @@ name = "sinker"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "backoff",
  "chrono",
  "clap",
  "futures",

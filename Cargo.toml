@@ -30,6 +30,7 @@ serde_yaml = "0.9.34"
 thiserror = "1"
 serde_json_path = "0.6.7"
 rand = "0.8.5"
+backoff = "0.4.*"
 
 [dev-dependencies]
 rstest = "0.17.0"

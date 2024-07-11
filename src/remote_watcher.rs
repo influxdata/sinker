@@ -1,10 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use backoff::backoff::Backoff;
 use futures::{StreamExt, TryStreamExt};
 use kube::api::{DynamicObject, WatchParams};
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
+use kube::runtime::watcher;
+use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
@@ -29,14 +32,13 @@ pub struct RemoteWatcher {
     canceled: Arc<RwLock<bool>>,
 }
 
-macro_rules! retry_sleep {
-    ($($arg:tt)*) =>{
+macro_rules! send_reconcile_on_fail {
+    ($self:expr, $backoff:expr, $($arg:tt)*) =>{
+        $self.send_reconcile();
         error!($($arg)*);
-        sleep(Duration::from_secs(5)).await;
+        sleep($backoff.next_backoff().unwrap_or(Duration::from_secs(5))).await;
     };
 }
-
-// TODO: Change sender types so errors can be passed up and type should be a full object
 
 impl RemoteWatcher {
     pub fn new(key: RemoteWatcherKey, sender: Sender<ObjectRef<ResourceSync>>) -> Self {
@@ -57,18 +59,29 @@ impl RemoteWatcher {
         }
     }
 
+    fn send_reconcile_on_success(&self, backoff: &mut DefaultBackoff) {
+        backoff.reset();
+        self.send_reconcile();
+    }
+
     pub async fn run(&self, ctx: Arc<Context>) {
-        while let Err(err) = self.start(Arc::clone(&ctx)).await {
+        let mut backoff = DefaultBackoff::default();
+
+        while let Err(err) = self.start(Arc::clone(&ctx), &mut backoff).await {
             if *self.canceled.read().await {
                 break;
             }
 
-            self.send_reconcile();
-            retry_sleep!("Error starting watch on remote object: {}", err);
+            send_reconcile_on_fail!(
+                self,
+                &mut backoff,
+                "Error starting watch on remote object: {}",
+                err
+            );
         }
     }
 
-    async fn start(&self, ctx: Arc<Context>) -> Result<()> {
+    async fn start(&self, ctx: Arc<Context>, backoff: &mut DefaultBackoff) -> Result<()> {
         let local_ns = self
             .key
             .resource_sync
@@ -90,9 +103,10 @@ impl RemoteWatcher {
             .ok_or(Error::ResourceVersionRequired)?;
 
         // Send a reconcile once in case something changed before the rv we are watching from
-        self.send_reconcile();
+        self.send_reconcile_on_success(backoff);
 
-        self.watch(&api, object_name, &resource_version).await
+        self.watch(&api, object_name, &resource_version, backoff)
+            .await
     }
 
     async fn watch(
@@ -100,6 +114,7 @@ impl RemoteWatcher {
         api: &NamespacedApi,
         object_name: &str,
         resource_version: &str,
+        backoff: &mut DefaultBackoff,
     ) -> Result<()> {
         let watch_params = WatchParams::default().fields(&format!("metadata.name={}", object_name));
         let mut resource_version = resource_version.to_string();
@@ -110,21 +125,25 @@ impl RemoteWatcher {
             while let Some(event) = stream.try_next().await? {
                 match event {
                     WatchEvent::Added(obj) => {
-                        resource_version = self.send(obj)?;
+                        resource_version = self.send(obj, backoff)?;
                     }
                     WatchEvent::Modified(obj) => {
-                        resource_version = self.send(obj)?;
+                        resource_version = self.send(obj, backoff)?;
                     }
                     WatchEvent::Deleted(obj) => {
-                        resource_version = self.send(obj)?;
+                        resource_version = self.send(obj, backoff)?;
                     }
                     WatchEvent::Bookmark(bookmark) => {
-                        self.send_reconcile();
+                        self.send_reconcile_on_success(backoff);
                         resource_version = bookmark.metadata.resource_version.clone();
                     }
                     WatchEvent::Error(err) => {
-                        self.send_reconcile();
-                        retry_sleep!("Error watching remote object: {}", err);
+                        send_reconcile_on_fail!(
+                            self,
+                            backoff,
+                            "Error watching remote object: {}",
+                            err
+                        );
                     }
                 }
             }
@@ -133,10 +152,10 @@ impl RemoteWatcher {
         Ok(())
     }
 
-    fn send(&self, obj: DynamicObject) -> Result<String> {
+    fn send(&self, obj: DynamicObject, backoff: &mut DefaultBackoff) -> Result<String> {
         obj.was_last_modified_by(&ResourceSync::group(&()))
             .is_some_and(|was| was)
-            .then(|| self.send_reconcile());
+            .then(|| self.send_reconcile_on_success(backoff));
         obj.metadata
             .resource_version
             .ok_or(Error::ResourceVersionRequired)
