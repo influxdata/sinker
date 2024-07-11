@@ -12,7 +12,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use tokio_context::context::Context as TokioContext;
 use tokio_context::context::RefContext;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::controller::Context;
 use crate::filters::Filterable;
@@ -38,6 +38,8 @@ macro_rules! send_reconcile_on_fail {
         sleep($backoff.next_backoff().unwrap_or(Duration::from_secs(5))).await;
     };
 }
+
+// TODO: May not want to trigger reconcile on all errors or bookmarks
 
 impl RemoteWatcher {
     pub fn new(key: RemoteWatcherKey, sender: Sender<ObjectRef<ResourceSync>>) -> Self {
@@ -105,6 +107,7 @@ impl RemoteWatcher {
             .ok_or(Error::ResourceVersionRequired)?;
 
         // Send a reconcile once in case something changed before the rv we are watching from
+        debug!("Sending reconcile on start");
         self.send_reconcile_on_success(backoff);
 
         self.watch(&api, object_name, &resource_version, tctx, backoff)
@@ -134,19 +137,20 @@ impl RemoteWatcher {
                     let mut stream = stream?.boxed();
 
                     while let Some(event) = stream.try_next().await? {
-                        match event {
-                            WatchEvent::Added(obj) => {
-                                resource_version = self.send(obj, backoff)?;
-                            }
-                            WatchEvent::Modified(obj) => {
-                                resource_version = self.send(obj, backoff)?;
-                            }
-                            WatchEvent::Deleted(obj) => {
-                                resource_version = self.send(obj, backoff)?;
+                        resource_version = match event {
+                            WatchEvent::Added(obj) | WatchEvent::Modified(obj) | WatchEvent::Deleted(obj)  => {
+                                obj.was_last_modified_by(&ResourceSync::group(&())).is_some_and(|was| was).then(|| {
+                                    debug!("Sending reconcile on watch event for externally modified object");
+                                    self.send_reconcile_on_success(backoff);
+                                });
+
+                                obj.metadata.resource_version.clone().ok_or(Error::ResourceVersionRequired)?
                             }
                             WatchEvent::Bookmark(bookmark) => {
+                                debug!("Sending reconcile on watch bookmark");
                                 self.send_reconcile_on_success(backoff);
-                                resource_version = bookmark.metadata.resource_version.clone();
+
+                                bookmark.metadata.resource_version.clone()
                             }
                             WatchEvent::Error(err) => {
                                 send_reconcile_on_fail!(
@@ -155,20 +159,13 @@ impl RemoteWatcher {
                                     "Error watching remote object: {}",
                                     err
                                 );
+
+                                resource_version
                             }
                         }
                     }
                 }
             }
         }
-    }
-
-    fn send(&self, obj: DynamicObject, backoff: &mut DefaultBackoff) -> Result<String> {
-        obj.was_last_modified_by(&ResourceSync::group(&()))
-            .is_some_and(|was| was)
-            .then(|| self.send_reconcile_on_success(backoff));
-        obj.metadata
-            .resource_version
-            .ok_or(Error::ResourceVersionRequired)
     }
 }
