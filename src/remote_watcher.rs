@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use backoff::backoff::Backoff;
@@ -9,13 +8,12 @@ use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher;
 use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
+use kubert::client::Client;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
-use tokio_context::context::Context as TokioContext;
-use tokio_context::context::RefContext;
+use tokio_context::context::{Context, RefContext};
 use tracing::{debug, error};
 
-use crate::controller::Context;
 use crate::filters::Filterable;
 use crate::resource_extensions::NamespacedApi;
 use crate::resources::{ClusterResourceRef, ResourceSync};
@@ -30,7 +28,8 @@ pub struct RemoteWatcherKey {
 pub struct RemoteWatcher {
     key: RemoteWatcherKey,
     sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
-    tctx: RefContext,
+    ctx: RefContext,
+    client: Client,
 }
 
 macro_rules! send_reconcile_on_fail {
@@ -47,9 +46,15 @@ impl RemoteWatcher {
     pub fn new(
         key: RemoteWatcherKey,
         sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
-        tctx: RefContext,
+        ctx: RefContext,
+        client: Client,
     ) -> Self {
-        Self { key, sender, tctx }
+        Self {
+            key,
+            sender,
+            ctx,
+            client,
+        }
     }
 
     fn send_reconcile(&self) {
@@ -63,18 +68,18 @@ impl RemoteWatcher {
         self.send_reconcile();
     }
 
-    pub async fn run(&self, ctx: Arc<Context>) {
+    pub async fn run(&self) {
         let mut backoff = DefaultBackoff::default();
 
-        let (mut tctx_local, handle) = TokioContext::with_parent(&self.tctx, None);
+        let (mut ctx, handle) = Context::with_parent(&self.ctx, None);
 
         loop {
             tokio::select! {
-                _ = tctx_local.done() => {
+                _ = ctx.done() => {
                     handle.cancel();
                     return;
                 },
-                Err(err) = self.start(Arc::clone(&ctx), &mut backoff) => {
+                Err(err) = self.start(&mut backoff) => {
                     send_reconcile_on_fail!(
                         self,
                         &mut backoff,
@@ -86,7 +91,7 @@ impl RemoteWatcher {
         }
     }
 
-    async fn start(&self, ctx: Arc<Context>, backoff: &mut DefaultBackoff) -> Result<()> {
+    async fn start(&self, backoff: &mut DefaultBackoff) -> Result<()> {
         let local_ns = self
             .key
             .resource_sync
@@ -96,7 +101,7 @@ impl RemoteWatcher {
         let api = self
             .key
             .object
-            .api_for(Arc::clone(&ctx), local_ns.as_str())
+            .api_for(self.client.clone(), local_ns.as_str())
             .await?;
 
         let object_name = &self.key.object.resource_ref.name;
@@ -122,14 +127,14 @@ impl RemoteWatcher {
         resource_version: &str,
         backoff: &mut DefaultBackoff,
     ) -> Result<()> {
-        let (mut tctx, handle) = TokioContext::with_parent(&self.tctx, None);
+        let (mut ctx, handle) = Context::with_parent(&self.ctx, None);
 
         let watch_params = WatchParams::default().fields(&format!("metadata.name={}", object_name));
         let mut resource_version = resource_version.to_string();
 
         loop {
             tokio::select! {
-                _ = tctx.done() => {
+                _ = ctx.done() => {
                     handle.cancel();
                     return Ok(());
                 },
