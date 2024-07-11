@@ -6,7 +6,6 @@ use futures::{StreamExt, TryStreamExt};
 use kube::api::{DynamicObject, WatchParams};
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
-use kube::runtime::watcher;
 use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
 use tokio::sync::mpsc::Sender;
