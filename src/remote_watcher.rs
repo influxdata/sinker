@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use backoff::backoff::Backoff;
 use futures::{StreamExt, TryStreamExt};
-use kube::api::{DynamicObject, WatchParams};
+use kube::api::WatchParams;
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher::DefaultBackoff;
