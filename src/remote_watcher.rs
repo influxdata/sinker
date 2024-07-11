@@ -9,7 +9,7 @@ use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher;
 use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 use tokio_context::context::RefContext;
 use tokio_context::context::{Context as TokioContext, Handle};
@@ -29,7 +29,7 @@ pub struct RemoteWatcherKey {
 
 pub struct RemoteWatcher {
     key: RemoteWatcherKey,
-    sender: Sender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
+    sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
     tctx: RefContext,
     handle: Handle,
 }
@@ -47,7 +47,7 @@ macro_rules! send_reconcile_on_fail {
 impl RemoteWatcher {
     pub fn new(
         key: RemoteWatcherKey,
-        sender: Sender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
+        sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
         tctx: &RefContext,
     ) -> Self {
         let (tctx, handle) = RefContext::with_parent(tctx, None);
@@ -64,10 +64,7 @@ impl RemoteWatcher {
     }
 
     fn send_reconcile(&self) {
-        if let Err(err) = self
-            .sender
-            .blocking_send(Ok(self.key.resource_sync.clone()))
-        {
+        if let Err(err) = self.sender.send(Ok(self.key.resource_sync.clone())) {
             error!("Error sending reconcile: {}", err);
         }
     }
