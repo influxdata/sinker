@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher;
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_context::context::{Handle, RefContext};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -16,7 +15,7 @@ use crate::remote_watcher::{RemoteWatcher, RemoteWatcherKey};
 use crate::resources::ResourceSync;
 
 type ContextAndThreadHandle = (Handle, JoinHandle<()>);
-type SyncMap<K, V> = Arc<RwLock<HashMap<K, V>>>;
+type SyncMap<K, V> = Arc<Mutex<HashMap<K, V>>>;
 
 pub struct RemoteWatcherManager {
     tctx: RefContext,
@@ -34,7 +33,7 @@ impl RemoteWatcherManager {
         let (sender, receiver) = mpsc::unbounded_channel();
         let manager = RemoteWatcherManager {
             tctx,
-            watchers: Arc::new(RwLock::new(HashMap::new())),
+            watchers: Arc::new(Mutex::new(HashMap::new())),
             sender,
         };
 
@@ -42,7 +41,9 @@ impl RemoteWatcherManager {
     }
 
     pub async fn add_if_not_exists(&self, key: &RemoteWatcherKey, ctx: Arc<Context>) {
-        if self.watchers.read().await.get(key).is_some() {
+        let mut watchers = self.watchers.lock().await;
+
+        if watchers.get(key).is_some() {
             return;
         }
 
@@ -51,14 +52,13 @@ impl RemoteWatcherManager {
 
         let join_handle = tokio::spawn(async move { watcher.run(ctx).await });
 
-        self.watchers
-            .write()
-            .await
-            .insert(key.clone(), (handle, join_handle));
+        watchers.insert(key.clone(), (handle, join_handle));
     }
 
     pub async fn stop_and_remove_if_exists(&self, key: &RemoteWatcherKey) {
-        if let Some(handles) = self.watchers.write().await.remove(key) {
+        let mut watchers = self.watchers.lock().await;
+
+        if let Some(handles) = watchers.remove(key) {
             handles.0.cancel();
 
             if let Err(err) = handles.1.await {
