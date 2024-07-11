@@ -21,7 +21,7 @@ use crate::resource_extensions::NamespacedApi;
 use crate::resources::{ClusterResourceRef, ResourceSync};
 use crate::{Error, Result};
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 pub struct RemoteWatcherKey {
     pub object: ClusterResourceRef,
     pub resource_sync: ObjectRef<ResourceSync>,
