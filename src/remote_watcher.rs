@@ -194,7 +194,7 @@ impl RemoteWatcher {
                                 bookmark_rv
                             }
                             WatchEvent::Error(err) if err.code == 410 => {
-                                debug!("ResourceVersion {:#?} is expired, so we restart from the beginning for Object {:#?}", resource_version, self.key);
+                                debug!("ResourceVersion {:#?} is expired, so we restart from the beginning for object {:#?}", resource_version, self.key);
                                 "0".to_string()
                             }
                             WatchEvent::Error(err) => {
