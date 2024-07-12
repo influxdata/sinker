@@ -145,20 +145,22 @@ impl RemoteWatcher {
                         resource_version = match event {
                             WatchEvent::Added(obj) | WatchEvent::Modified(obj) | WatchEvent::Deleted(obj)  => {
                                 obj.was_last_modified_by(&ResourceSync::group(&())).is_some_and(|was| was).then(|| {
-                                    debug!("Sending reconcile on watch event for externally modified object");
+                                    debug!("Sending reconcile on watch event for externally modified object: {:#?}", obj);
                                     self.send_reconcile_on_success(backoff);
                                 });
 
                                 obj.metadata.resource_version.clone().ok_or(Error::ResourceVersionRequired)?
                             }
                             WatchEvent::Bookmark(bookmark) => {
-                                debug!("Sending reconcile on watch bookmark");
-                                self.send_reconcile_on_success(backoff);
+                                let bookmark_rv = bookmark.metadata.resource_version.clone();
 
-                                bookmark.metadata.resource_version.clone()
+                                debug!("Bookmark event received for {} at ResourceVersion {}", object_name, bookmark_rv);
+                                backoff.reset();
+
+                                bookmark_rv
                             }
                             WatchEvent::Error(err) if err.code == 410 => {
-                                // ResourceVersion is expired so we restart from the beginning
+                                debug!("ResourceVersion {} is expired for Object {} so we restart from the beginning", resource_version, object_name);
                                 "0".to_string()
                             }
                             WatchEvent::Error(err) => {
