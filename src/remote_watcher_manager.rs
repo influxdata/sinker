@@ -50,7 +50,7 @@ impl RemoteWatcherManager {
             return;
         }
 
-        debug!("Starting remote watcher for {:#?}", key);
+        debug!("Starting remote watcher for: {:#?}", key);
 
         let (ctx, handle) = RefContext::with_parent(&self.ctx, None);
         let watcher =
@@ -65,14 +65,14 @@ impl RemoteWatcherManager {
         let mut watchers = self.watchers.lock().await;
 
         if let Some(handles) = watchers.remove(key) {
-            debug!("Stopping remote watcher for {:#?}", key);
+            debug!("Stopping remote watcher for: {:#?}", key);
 
             handles.0.cancel();
 
             if let Err(err) = handles.1.await {
                 error!("Error stopping remote watcher: {}", err);
             } else {
-                debug!("Remote watcher stopped for {:#?}", key);
+                debug!("Remote watcher stopped for: {:#?}", key);
             }
         }
     }
