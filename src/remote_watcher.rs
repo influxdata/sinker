@@ -115,7 +115,7 @@ impl RemoteWatcher {
         // Send a reconcile once in case something changed before the rv we are watching from
         debug!(
             "Sending reconcile on start for object: {:#?} at ResourceVersion: {:#?}",
-            object_name, resource_version
+            self.key, resource_version
         );
         self.send_reconcile_on_success(backoff);
 
@@ -149,15 +149,15 @@ impl RemoteWatcher {
                             WatchEvent::Added(obj) | WatchEvent::Modified(obj) | WatchEvent::Deleted(obj)  => {
                                 match obj.was_last_modified_by(&ResourceSync::group(&())) {
                                     None => {
-                                        debug!("Sending reconcile on watch event because it is impossible to determine if the object was last modified by us: {:#?}", obj);
+                                        debug!("Sending reconcile on watch event because it is impossible to determine if the object was last modified by us: {:#?}", self.key);
                                         self.send_reconcile_on_success(backoff);
                                     }
                                     Some(was_last_modified_by_us) if was_last_modified_by_us => {
-                                        debug!("Sending reconcile on watch event for externally modified object: {:#?}", obj);
+                                        debug!("Sending reconcile on watch event for externally modified object: {:#?}", self.key);
                                         self.send_reconcile_on_success(backoff);
                                     }
                                     _ => {
-                                        debug!("Ignoring watch event for object modified by us: {:#?}", obj);
+                                        debug!("Ignoring watch event for object modified by us: {:#?}", self.key);
                                     }
                                 }
 
@@ -166,13 +166,13 @@ impl RemoteWatcher {
                             WatchEvent::Bookmark(bookmark) => {
                                 let bookmark_rv = bookmark.metadata.resource_version.clone();
 
-                                debug!("Bookmark event received for {:#?} at ResourceVersion {:#?}", object_name, bookmark_rv);
+                                debug!("Bookmark event received for {:#?} at ResourceVersion {:#?}", self.key, bookmark_rv);
                                 backoff.reset();
 
                                 bookmark_rv
                             }
                             WatchEvent::Error(err) if err.code == 410 => {
-                                debug!("ResourceVersion {:#?} is expired for Object {:#?} so we restart from the beginning", resource_version, object_name);
+                                debug!("ResourceVersion {:#?} is expired for Object {:#?} so we restart from the beginning", resource_version, self.key);
                                 "0".to_string()
                             }
                             WatchEvent::Error(err) => {
