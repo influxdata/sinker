@@ -147,10 +147,19 @@ impl RemoteWatcher {
                     while let Some(event) = stream.try_next().await? {
                         resource_version = match event {
                             WatchEvent::Added(obj) | WatchEvent::Modified(obj) | WatchEvent::Deleted(obj)  => {
-                                obj.was_last_modified_by(&ResourceSync::group(&())).is_some_and(|was| was).then(|| {
-                                    debug!("Sending reconcile on watch event for externally modified object: {:#?}", obj);
-                                    self.send_reconcile_on_success(backoff);
-                                });
+                                match obj.was_last_modified_by(&ResourceSync::group(&())) {
+                                    None => {
+                                        debug!("Sending reconcile on watch event because it is impossible to determine if the object was last modified by us: {:#?}", obj);
+                                        self.send_reconcile_on_success(backoff);
+                                    }
+                                    Some(was_last_modified_by_us) if was_last_modified_by_us => {
+                                        debug!("Sending reconcile on watch event for externally modified object: {:#?}", obj);
+                                        self.send_reconcile_on_success(backoff);
+                                    }
+                                    _ => {
+                                        debug!("Ignoring watch event for object modified by us: {:#?}", obj);
+                                    }
+                                }
 
                                 obj.metadata.resource_version.clone().ok_or(Error::ResourceVersionRequired)?
                             }
