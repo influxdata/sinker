@@ -159,7 +159,7 @@ impl RemoteWatcher {
                                         self.send_reconcile_on_success(backoff);
                                     }
                                     _ => {
-                                        debug!("Ignoring watch event at ResourceVersion: {:#?}for object modified by us: {:#?}", event_rv, self.key);
+                                        debug!("Ignoring watch event at ResourceVersion: {:#?} for object modified by us: {:#?}", event_rv, self.key);
                                     }
                                 }
 
