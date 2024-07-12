@@ -165,7 +165,11 @@ impl RemoteWatcher {
                                     err
                                 );
 
-                                resource_version
+                                match err.code {
+                                    // Resource version is expired, start from the beginning
+                                    410 => "0".to_string(),
+                                    _ => resource_version,
+                                }
                             }
                         }
                     }
