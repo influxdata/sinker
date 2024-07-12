@@ -157,6 +157,10 @@ impl RemoteWatcher {
 
                                 bookmark.metadata.resource_version.clone()
                             }
+                            WatchEvent::Error(err) if err.code == 410 => {
+                                // ResourceVersion is expired so we restart from the beginning
+                                "0".to_string()
+                            }
                             WatchEvent::Error(err) => {
                                 send_reconcile_on_fail!(
                                     self,
@@ -165,11 +169,7 @@ impl RemoteWatcher {
                                     err
                                 );
 
-                                match err.code {
-                                    // Resource version is expired, start from the beginning
-                                    410 => "0".to_string(),
-                                    _ => resource_version,
-                                }
+                                resource_version
                             }
                         }
                     }
