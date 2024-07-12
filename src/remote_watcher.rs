@@ -152,6 +152,8 @@ impl RemoteWatcher {
                     return Ok(());
                 },
                 stream = api.watch(&watch_params, &resource_version) => {
+                    debug!("Started watch at ResourceVersion {:#?} for remote object: {:#?}", resource_version, self.key);
+
                     let mut stream = stream?.boxed();
 
                     while let Some(event) = stream.try_next().await? {

@@ -71,6 +71,8 @@ impl RemoteWatcherManager {
 
             if let Err(err) = handles.1.await {
                 error!("Error stopping remote watcher: {}", err);
+            } else {
+                debug!("Remote watcher stopped for {:#?}", key);
             }
         }
     }
