@@ -105,7 +105,7 @@ async fn add_target_finalizer(
         .patch(name, &PatchParams::default(), &patch)
         .await?;
 
-    requeue_after!()
+    requeue_after!(Duration::from_millis(500))
 }
 
 async fn reconcile_normally(

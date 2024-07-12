@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! requeue_after {
     ($duration:expr) => {
-        Ok(Action::requeue(Duration::from_secs($duration)))
+        Ok(Action::requeue($duration))
     };
     () => {
         Ok(Action::requeue(Duration::from_secs(5)))
