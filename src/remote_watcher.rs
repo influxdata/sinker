@@ -19,7 +19,7 @@ use crate::resource_extensions::NamespacedApi;
 use crate::resources::{ClusterResourceRef, ResourceSync};
 use crate::{Error, Result};
 
-#[derive(Hash, PartialEq, Eq, Clone)]
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub struct RemoteWatcherKey {
     pub object: ClusterResourceRef,
     pub resource_sync: ObjectRef<ResourceSync>,
@@ -113,7 +113,10 @@ impl RemoteWatcher {
             .ok_or(Error::ResourceVersionRequired)?;
 
         // Send a reconcile once in case something changed before the rv we are watching from
-        debug!("Sending reconcile on start");
+        debug!(
+            "Sending reconcile on start for object: {:#?} at ResourceVersion: {:#?}",
+            object_name, resource_version
+        );
         self.send_reconcile_on_success(backoff);
 
         self.watch(&api, object_name, &resource_version, backoff)
@@ -154,13 +157,13 @@ impl RemoteWatcher {
                             WatchEvent::Bookmark(bookmark) => {
                                 let bookmark_rv = bookmark.metadata.resource_version.clone();
 
-                                debug!("Bookmark event received for {} at ResourceVersion {}", object_name, bookmark_rv);
+                                debug!("Bookmark event received for {:#?} at ResourceVersion {:#?}", object_name, bookmark_rv);
                                 backoff.reset();
 
                                 bookmark_rv
                             }
                             WatchEvent::Error(err) if err.code == 410 => {
-                                debug!("ResourceVersion {} is expired for Object {} so we restart from the beginning", resource_version, object_name);
+                                debug!("ResourceVersion {:#?} is expired for Object {:#?} so we restart from the beginning", resource_version, object_name);
                                 "0".to_string()
                             }
                             WatchEvent::Error(err) => {
