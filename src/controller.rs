@@ -176,6 +176,10 @@ async fn reconcile_normally(
     Ok(Action::await_change())
 }
 
+// TODO: Until CDC finalizer is implemented (and even after that if a CDC is deleted using foreground propagation) CDC deletion could cause the cluster to be deleted or unreachable before we have a chance to clean up the resource(s) owned by the ResourceSync, we should be able to detect and handle this scenario gracefully
+// TODO: Immutability on source/target (via CEL?)
+// TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
+
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
     let name = resource_sync
         .metadata
@@ -187,10 +191,6 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     debug!(?resource_sync.spec, "got");
     let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
 
-    // TODO: Until CDC finalizer is implemented (and even after that if a CDC is deleted using foreground propagation) CDC deletion could cause the cluster to be deleted or unreachable before we have a chance to clean up the resource(s) owned by the ResourceSync, we should be able to detect and handle this scenario gracefully
-    // TODO: Immutability on source/target (via CEL?)
-    // TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
-    // TODO: Initialize a watch on specific resources beginning at fetched resourceVersion and forward a single event (whether successful or error) as a reconcile the object that initiated the watch and then close the stream
     let target_api = resource_sync
         .spec
         .target
