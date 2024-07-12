@@ -152,7 +152,7 @@ impl RemoteWatcher {
                                         debug!("Sending reconcile on watch event because it is impossible to determine if the object was last modified by us: {:#?}", self.key);
                                         self.send_reconcile_on_success(backoff);
                                     }
-                                    Some(was_last_modified_by_us) if was_last_modified_by_us => {
+                                    Some(was_last_modified_by_us) if !was_last_modified_by_us => {
                                         debug!("Sending reconcile on watch event for externally modified object: {:#?}", self.key);
                                         self.send_reconcile_on_success(backoff);
                                     }
