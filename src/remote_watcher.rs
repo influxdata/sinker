@@ -40,6 +40,15 @@ macro_rules! send_reconcile_on_fail {
     };
 }
 
+macro_rules! rv_for {
+    ($obj:expr) => {
+        $obj.metadata
+            .resource_version
+            .clone()
+            .ok_or(Error::ResourceVersionRequired)?
+    };
+}
+
 // TODO: May not want to trigger reconcile on all errors or bookmarks
 
 impl RemoteWatcher {
@@ -146,8 +155,16 @@ impl RemoteWatcher {
 
                     while let Some(event) = stream.try_next().await? {
                         resource_version = match event {
-                            WatchEvent::Added(obj) | WatchEvent::Modified(obj) | WatchEvent::Deleted(obj)  => {
-                                let event_rv = obj.metadata.resource_version.clone().ok_or(Error::ResourceVersionRequired)?;
+                            WatchEvent::Deleted(obj) => {
+                                let event_rv = rv_for!(obj);
+
+                                debug!("Sending reconcile on watch event at ResourceVersion: {:#?} for deleted object: {:#?}", event_rv, self.key);
+                                self.send_reconcile_on_success(backoff);
+
+                                event_rv
+                            }
+                            WatchEvent::Added(obj) | WatchEvent::Modified(obj) => {
+                                let event_rv = rv_for!(obj);
 
                                 match obj.was_last_modified_by(&ResourceSync::group(&())) {
                                     None => {
