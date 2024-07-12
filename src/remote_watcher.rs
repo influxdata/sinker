@@ -49,7 +49,8 @@ macro_rules! rv_for {
     };
 }
 
-// TODO: May not want to trigger reconcile on all errors or bookmarks
+// TODO: There may be some other error types that should not be triggering reconciles
+// TODO: Could also process mappings to ignore changes to fields that we don't care about, but it's far more complex for a lot less benefit
 
 impl RemoteWatcher {
     pub fn new(
