@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_context::context::{Handle, RefContext};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::remote_watcher::{RemoteWatcher, RemoteWatcherKey};
 use crate::resources::ResourceSync;
@@ -50,6 +50,8 @@ impl RemoteWatcherManager {
             return;
         }
 
+        debug!("Starting remote watcher for {:?}", key.resource_sync);
+
         let (ctx, handle) = RefContext::with_parent(&self.ctx, None);
         let watcher =
             RemoteWatcher::new(key.clone(), self.sender.clone(), ctx, self.client.clone());
@@ -63,6 +65,8 @@ impl RemoteWatcherManager {
         let mut watchers = self.watchers.lock().await;
 
         if let Some(handles) = watchers.remove(key) {
+            debug!("Stopping remote watcher for {:?}", key.resource_sync);
+
             handles.0.cancel();
 
             if let Err(err) = handles.1.await {
