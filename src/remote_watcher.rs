@@ -78,7 +78,7 @@ impl RemoteWatcher {
         self.send_reconcile();
     }
 
-    pub async fn run(&self) {
+    pub async fn run(self) {
         let mut backoff = DefaultBackoff::default();
 
         let (mut ctx, handle) = Context::with_parent(&self.ctx, None);

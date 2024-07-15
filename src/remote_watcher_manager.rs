@@ -56,7 +56,7 @@ impl RemoteWatcherManager {
         let watcher =
             RemoteWatcher::new(key.clone(), self.sender.clone(), ctx, self.client.clone());
 
-        let join_handle = tokio::spawn(async move { watcher.run().await });
+        let join_handle = tokio::spawn(watcher.run());
 
         watchers.insert(key.clone(), (handle, join_handle));
     }
