@@ -14,7 +14,6 @@ use kube::{
     Api, Client, Resource, ResourceExt,
 };
 use serde_json::json;
-use tokio_context::context::RefContext;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
 
@@ -236,10 +235,8 @@ pub async fn run(client: Client) -> Result<()> {
         .applied_objects()
         .predicate_filter(predicates::generation);
 
-    let (ctx, handle) = RefContext::new();
-
     let (remote_watcher_manager, remote_objects_trigger) =
-        RemoteWatcherManager::new(ctx, client.clone());
+        RemoteWatcherManager::new(client.clone());
 
     Controller::for_stream(resource_syncs, reader)
         .reconcile_on(remote_objects_trigger)
@@ -255,8 +252,6 @@ pub async fn run(client: Client) -> Result<()> {
         .filter_map(|x| async move { Result::ok(x) })
         .for_each(|_| futures::future::ready(()))
         .await;
-
-    handle.cancel();
 
     Ok(())
 }

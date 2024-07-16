@@ -7,7 +7,7 @@ use kubert::client::Client;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
-use tokio_context::context::{Handle, RefContext};
+use tokio_context::context::{Context, Handle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error};
 
@@ -18,7 +18,6 @@ type ContextAndThreadHandle = (Handle, JoinHandle<()>);
 type SyncMap<K, V> = Arc<Mutex<HashMap<K, V>>>;
 
 pub struct RemoteWatcherManager {
-    ctx: RefContext,
     watchers: SyncMap<RemoteWatcherKey, ContextAndThreadHandle>,
     sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
     client: Client,
@@ -26,7 +25,6 @@ pub struct RemoteWatcherManager {
 
 impl RemoteWatcherManager {
     pub fn new(
-        ctx: RefContext,
         client: Client,
     ) -> (
         Self,
@@ -34,7 +32,6 @@ impl RemoteWatcherManager {
     ) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let manager = RemoteWatcherManager {
-            ctx,
             watchers: Arc::new(Mutex::new(HashMap::new())),
             sender,
             client,
@@ -52,11 +49,10 @@ impl RemoteWatcherManager {
 
         debug!("Starting remote watcher for: {:#?}", key);
 
-        let (ctx, handle) = RefContext::with_parent(&self.ctx, None);
-        let watcher =
-            RemoteWatcher::new(key.clone(), self.sender.clone(), ctx, self.client.clone());
+        let (ctx, handle) = Context::new();
+        let watcher = RemoteWatcher::new(key.clone(), self.sender.clone(), self.client.clone());
 
-        let join_handle = tokio::spawn(watcher.run());
+        let join_handle = tokio::spawn(watcher.run(ctx));
 
         watchers.insert(key.clone(), (handle, join_handle));
     }
