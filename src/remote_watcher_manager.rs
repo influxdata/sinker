@@ -23,6 +23,22 @@ pub struct RemoteWatcherManager {
     client: Client,
 }
 
+macro_rules! stop_and_remove_if_exists {
+    ($watchers:expr, $key:expr) => {
+        if let Some(handles) = $watchers.remove($key) {
+            debug!("Stopping remote watcher for: {:#?}", $key);
+
+            handles.0.cancel();
+
+            if let Err(err) = handles.1.await {
+                error!("Error stopping remote watcher: {}", err);
+            } else {
+                debug!("Remote watcher stopped for: {:#?}", $key);
+            }
+        }
+    };
+}
+
 impl RemoteWatcherManager {
     pub fn new(
         client: Client,
@@ -60,28 +76,15 @@ impl RemoteWatcherManager {
     pub async fn stop_and_remove_if_exists(&self, key: &RemoteWatcherKey) {
         let mut watchers = self.watchers.lock().await;
 
-        if let Some(handles) = watchers.remove(key) {
-            debug!("Stopping remote watcher for: {:#?}", key);
-
-            handles.0.cancel();
-
-            if let Err(err) = handles.1.await {
-                error!("Error stopping remote watcher: {}", err);
-            } else {
-                debug!("Remote watcher stopped for: {:#?}", key);
-            }
-        }
+        stop_and_remove_if_exists!(watchers, key);
     }
 
     pub async fn stop_all(&self) {
-        let keys = {
-            let watchers = self.watchers.lock().await;
-
-            watchers.keys().cloned().collect::<Vec<_>>()
-        };
+        let mut watchers = self.watchers.lock().await;
+        let keys = watchers.keys().cloned().collect::<Vec<_>>();
 
         for key in keys {
-            self.stop_and_remove_if_exists(&key).await;
+            stop_and_remove_if_exists!(watchers, &key);
         }
     }
 }
