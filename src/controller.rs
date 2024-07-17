@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
@@ -238,20 +239,20 @@ pub async fn run(client: Client) -> Result<()> {
     let (remote_watcher_manager, remote_objects_trigger) =
         RemoteWatcherManager::new(client.clone());
 
+    let ctx = Arc::new(Context {
+        client,
+        remote_watcher_manager,
+    });
+
     Controller::for_stream(resource_syncs, reader)
         .reconcile_on(remote_objects_trigger)
         .shutdown_on_signal()
-        .run(
-            reconcile,
-            error_policy,
-            Arc::new(Context {
-                client,
-                remote_watcher_manager,
-            }),
-        )
+        .run(reconcile, error_policy, Arc::clone(&ctx))
         .filter_map(|x| async move { Result::ok(x) })
         .for_each(|_| futures::future::ready(()))
         .await;
+
+    ctx.remote_watcher_manager.stop_all().await;
 
     Ok(())
 }

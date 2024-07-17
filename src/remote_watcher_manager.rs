@@ -72,4 +72,16 @@ impl RemoteWatcherManager {
             }
         }
     }
+
+    pub async fn stop_all(&self) {
+        let keys = {
+            let watchers = self.watchers.lock().await;
+
+            watchers.keys().cloned().collect::<Vec<_>>()
+        };
+
+        for key in keys {
+            self.stop_and_remove_if_exists(&key).await;
+        }
+    }
 }
