@@ -31,6 +31,9 @@ pub enum Error {
     #[error("Namespace is required")]
     NamespaceRequired,
 
+    #[error("Failed to acquire ResourceVersion")]
+    ResourceVersionRequired,
+
     #[error(transparent)]
     AddToPathError(#[from] mapping::AddToPathError),
 
@@ -52,7 +55,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Expose all controller components used by main
 pub mod controller;
 
+mod filters;
 mod mapping;
+mod remote_watcher;
+mod remote_watcher_manager;
 mod resource_extensions;
 pub mod resources;
 mod util;

@@ -39,7 +39,7 @@ pub struct ResourceSyncStatus {
     pub demo: String,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterResourceRef {
     /// This is a reference to a resource that lives in the cluster specified by the sister cluster field.
@@ -57,7 +57,7 @@ pub struct ClusterResourceRef {
 
 /// This is a GVKN (apiVersion + kind + name) reference to a resource.
 /// The namespace is given by the context where this reference belongs to.
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GVKN {
     pub api_version: String,
@@ -83,7 +83,7 @@ impl TryFrom<&GVKN> for GroupVersionKind {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRef {
     /// If present, overrides the default namespace defined in the provided kubeConfig
@@ -91,13 +91,13 @@ pub struct ClusterRef {
     pub kube_config: KubeConfig,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KubeConfig {
     pub secret_ref: SecretRef,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretRef {
     pub name: String,
