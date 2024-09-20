@@ -249,7 +249,7 @@ mod tests {
         r#"{"spec":{},"status":{"keep":1,"foo":{"bar":"demo"}}}"#
     )]
     #[tokio::test]
-    async fn test_add_to_path(#[case] path: &str, #[case] expected: &str) {
+    async fn test_add_to_path(#[case] path: &str, #[case] expected: serde_json::Value) {
         let mut root = json!({ "spec": {}, "status": {"keep": 1} });
         set_field_path(
             &mut root,
@@ -258,7 +258,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(serde_json::to_string(&root).unwrap(), expected);
+        assert_eq!(root, expected);
     }
 
     #[tokio::test]
@@ -354,10 +354,7 @@ mod tests {
             &ar,
         )
         .unwrap();
-        assert_eq!(
-            serde_json::to_string(&target).unwrap(),
-            serde_json::to_string(&expected).unwrap(),
-        );
+        assert_eq!(json!(target), expected,);
     }
 
     #[tokio::test]
@@ -655,10 +652,7 @@ mod tests {
             &resource_sync,
         )
         .unwrap();
-        assert_eq!(
-            serde_json::to_string(&target).unwrap(),
-            serde_json::to_string(&expected).unwrap(),
-        );
+        assert_eq!(json!(target), expected,);
     }
 
     #[tokio::test]
