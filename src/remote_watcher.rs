@@ -5,7 +5,6 @@ use futures::{StreamExt, TryStreamExt};
 use kube::api::WatchParams;
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
-use kube::runtime::watcher;
 use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
 use kubert::client::Client;
@@ -27,7 +26,7 @@ pub struct RemoteWatcherKey {
 
 pub struct RemoteWatcher {
     key: RemoteWatcherKey,
-    sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
+    sender: UnboundedSender<ObjectRef<ResourceSync>>,
     client: Client,
 }
 
@@ -54,7 +53,7 @@ macro_rules! rv_for {
 impl RemoteWatcher {
     pub fn new(
         key: RemoteWatcherKey,
-        sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
+        sender: UnboundedSender<ObjectRef<ResourceSync>>,
         client: Client,
     ) -> Self {
         Self {
@@ -65,7 +64,7 @@ impl RemoteWatcher {
     }
 
     fn send_reconcile(&self) {
-        if let Err(err) = self.sender.send(Ok(self.key.resource_sync.clone())) {
+        if let Err(err) = self.sender.send(self.key.resource_sync.clone()) {
             error!("Error sending reconcile: {}", err);
         }
     }
