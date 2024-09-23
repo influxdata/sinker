@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use kube::runtime::reflector::ObjectRef;
-use kube::runtime::watcher;
 use kubert::client::Client;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, Mutex};
@@ -19,7 +18,7 @@ type SyncMap<K, V> = Arc<Mutex<HashMap<K, V>>>;
 
 pub struct RemoteWatcherManager {
     watchers: SyncMap<RemoteWatcherKey, ContextAndThreadHandle>,
-    sender: UnboundedSender<Result<ObjectRef<ResourceSync>, watcher::Error>>,
+    sender: UnboundedSender<ObjectRef<ResourceSync>>,
     client: Client,
 }
 
@@ -40,12 +39,7 @@ macro_rules! stop_and_remove_if_exists {
 }
 
 impl RemoteWatcherManager {
-    pub fn new(
-        client: Client,
-    ) -> (
-        Self,
-        UnboundedReceiverStream<Result<ObjectRef<ResourceSync>, watcher::Error>>,
-    ) {
+    pub fn new(client: Client) -> (Self, UnboundedReceiverStream<ObjectRef<ResourceSync>>) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let manager = RemoteWatcherManager {
             watchers: Arc::new(Mutex::new(HashMap::new())),
