@@ -259,7 +259,6 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     result
 }
 
-// TODO: Unit Test
 fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>) -> Time {
     let now = Time(Utc::now());
 
@@ -323,4 +322,49 @@ pub async fn run(client: Client) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::{sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION};
+    use crate::resources::ResourceSyncStatus;
+    use chrono::{TimeDelta, TimeZone};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use once_cell::sync::Lazy;
+    use rstest::rstest;
+
+    static NOW: Lazy<Time> = Lazy::new(|| Time(chrono::Utc::now()));
+    static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
+
+    #[rstest]
+    #[case::none(None, &NOW)]
+    #[case::no_conditions(Some(ResourceSyncStatus::default()), &NOW)]
+    #[case::empty_conditions(Some(ResourceSyncStatus{conditions: Some(vec![])}), &NOW)]
+    #[case::condition_already_present(
+        Some(
+            ResourceSyncStatus{
+                conditions: Some(
+                    vec![
+                        Condition{
+                            last_transition_time: EPOCH.clone(),
+                            type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
+                            message: "".to_string(),
+                            reason: "".to_string(),
+                            observed_generation: None,
+                            status: "".to_string()
+                        }
+                    ]
+                )
+            }
+        ),
+        &NOW
+    )]
+    #[tokio::test]
+    async fn test_sync_failing_transition_time(
+        #[case] status: Option<ResourceSyncStatus>,
+        #[case] expected: &Time,
+    ) {
+        let result = sync_failing_transition_time(&status);
+        let diff = result.0 - expected.0;
+
+        assert!(diff.le(&TimeDelta::minutes(1)))
+    }
+}
