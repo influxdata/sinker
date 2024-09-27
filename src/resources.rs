@@ -34,7 +34,7 @@ pub struct Mapping {
     pub to_field_path: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceSyncStatus {
     pub conditions: Option<Vec<Condition>>,
