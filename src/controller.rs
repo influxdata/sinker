@@ -246,12 +246,11 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     };
 
     if status != resource_sync.status {
-        let patch_params = apply_patch_params!();
         parent_api
             .patch_status(
                 &name,
-                &patch_params,
-                &Patch::Apply(json!({"status": status})),
+                &PatchParams::default(),
+                &Merge(json!({"status": status})),
             )
             .await?;
     }
