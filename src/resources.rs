@@ -1,6 +1,7 @@
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::{
     CustomResourceDefinition, CustomResourceValidation, JSONSchemaProps,
 };
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::{
     core::{gvk::ParseGroupVersionError, GroupVersionKind, TypeMeta},
     CustomResource,
@@ -36,7 +37,7 @@ pub struct Mapping {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceSyncStatus {
-    pub demo: String,
+    pub conditions: Option<Vec<Condition>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, Hash, PartialEq, Eq)]
