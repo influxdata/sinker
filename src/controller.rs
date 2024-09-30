@@ -1,7 +1,6 @@
-use std::{sync::Arc, time::Duration};
-
 use futures::StreamExt;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time};
+use k8s_openapi::chrono::Utc;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
 use kube::runtime::{predicates, reflector, WatchStreamExt};
@@ -14,6 +13,8 @@ use kube::{
     Api, Client, Resource, ResourceExt,
 };
 use serde_json::json;
+use std::string::ToString;
+use std::{sync::Arc, time::Duration};
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
 
@@ -22,18 +23,27 @@ use util::{WithItemAdded, WithItemRemoved};
 use crate::mapping::{apply_mappings, clone_resource};
 use crate::remote_watcher_manager::RemoteWatcherManager;
 use crate::resource_extensions::NamespacedApi;
+use crate::resources::ResourceSyncStatus;
 use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZER};
+
+static RESOURCE_SYNC_FAILING_CONDITION: &str = "ResourceSyncFailing";
 
 pub struct Context {
     pub client: Client,
     pub remote_watcher_manager: RemoteWatcherManager,
 }
 
+macro_rules! apply_patch_params {
+    () => {
+        PatchParams::apply(&ResourceSync::group(&())).force()
+    };
+}
+
 async fn reconcile_deleted_resource(
     resource_sync: Arc<ResourceSync>,
     name: &str,
     target_api: NamespacedApi,
-    parent_api: Api<ResourceSync>,
+    parent_api: &Api<ResourceSync>,
     ctx: Arc<Context>,
 ) -> Result<Action> {
     if !resource_sync.has_target_finalizer() {
@@ -88,7 +98,7 @@ async fn reconcile_deleted_resource(
 async fn add_target_finalizer(
     resource_sync: Arc<ResourceSync>,
     name: &str,
-    parent_api: Api<ResourceSync>,
+    parent_api: &Api<ResourceSync>,
 ) -> Result<Action> {
     let patched_finalizers = resource_sync
         .finalizers_clone_or_empty()
@@ -161,7 +171,7 @@ async fn reconcile_normally(
 
     debug!(?target, "produced target object");
 
-    let ssapply = PatchParams::apply(&ResourceSync::group(&())).force();
+    let ssapply = apply_patch_params!();
     target_api
         .patch(&target_ref.name, &ssapply, &Patch::Apply(&target))
         .await?;
@@ -185,31 +195,85 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
         .name
         .to_owned()
         .ok_or(Error::NameRequired)?;
-    info!(?name, "running reconciler");
-
-    debug!(?resource_sync.spec, "got");
-    let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
-
-    let target_api = resource_sync
-        .spec
-        .target
-        .api_for(ctx.client.clone(), &local_ns)
-        .await?;
-    let source_api = resource_sync
-        .spec
-        .source
-        .api_for(ctx.client.clone(), &local_ns)
-        .await?;
     let parent_api = resource_sync.api(ctx.client.clone());
 
-    match resource_sync {
-        resource_sync if resource_sync.has_been_deleted() => {
-            reconcile_deleted_resource(resource_sync, &name, target_api, parent_api, ctx).await
+    let result = {
+        let resource_sync = Arc::clone(&resource_sync);
+
+        info!(?name, "running reconciler");
+
+        debug!(?resource_sync.spec, "got");
+        let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
+
+        let target_api = resource_sync
+            .spec
+            .target
+            .api_for(ctx.client.clone(), &local_ns)
+            .await?;
+        let source_api = resource_sync
+            .spec
+            .source
+            .api_for(ctx.client.clone(), &local_ns)
+            .await?;
+
+        match resource_sync {
+            resource_sync if resource_sync.has_been_deleted() => {
+                reconcile_deleted_resource(resource_sync, &name, target_api, &parent_api, ctx).await
+            }
+            resource_sync if !resource_sync.has_target_finalizer() => {
+                add_target_finalizer(resource_sync, &name, &parent_api).await
+            }
+            _ => reconcile_normally(resource_sync, &name, source_api, target_api, ctx).await,
         }
-        resource_sync if !resource_sync.has_target_finalizer() => {
-            add_target_finalizer(resource_sync, &name, parent_api).await
+    };
+
+    let status = match &result {
+        Err(err) => {
+            let sync_failing_condition = Condition {
+                last_transition_time: sync_failing_transition_time(&(resource_sync.status)),
+                message: err.to_string(),
+                observed_generation: resource_sync.metadata.generation,
+                reason: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
+                status: "True".to_string(),
+                type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
+            };
+
+            Some(ResourceSyncStatus {
+                conditions: Some(vec![sync_failing_condition]),
+            })
         }
-        _ => reconcile_normally(resource_sync, &name, source_api, target_api, ctx).await,
+        _ => None,
+    };
+
+    if status != resource_sync.status {
+        parent_api
+            .patch_status(
+                &name,
+                &PatchParams::default(),
+                &Merge(json!({"status": status})),
+            )
+            .await?;
+    }
+
+    result
+}
+
+fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>) -> Time {
+    let now = Time(Utc::now());
+
+    match status {
+        None => now,
+        Some(status) => match &status.conditions {
+            None => now,
+            Some(conditions) => {
+                let sync_failing_condition = conditions
+                    .iter()
+                    .find(|c| c.type_ == RESOURCE_SYNC_FAILING_CONDITION);
+                sync_failing_condition
+                    .map(|c| c.last_transition_time.clone())
+                    .unwrap_or(now)
+            }
+        },
     }
 }
 
@@ -257,4 +321,49 @@ pub async fn run(client: Client) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::{sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION};
+    use crate::resources::ResourceSyncStatus;
+    use chrono::{TimeDelta, TimeZone};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use once_cell::sync::Lazy;
+    use rstest::rstest;
+
+    static NOW: Lazy<Time> = Lazy::new(|| Time(chrono::Utc::now()));
+    static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
+
+    #[rstest]
+    #[case::none(None, &NOW)]
+    #[case::no_conditions(Some(ResourceSyncStatus::default()), &NOW)]
+    #[case::empty_conditions(Some(ResourceSyncStatus{conditions: Some(vec![])}), &NOW)]
+    #[case::condition_already_present(
+        Some(
+            ResourceSyncStatus{
+                conditions: Some(
+                    vec![
+                        Condition{
+                            last_transition_time: EPOCH.clone(),
+                            type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
+                            message: "".to_string(),
+                            reason: "".to_string(),
+                            observed_generation: None,
+                            status: "".to_string()
+                        }
+                    ]
+                )
+            }
+        ),
+        &NOW
+    )]
+    #[tokio::test]
+    async fn test_sync_failing_transition_time(
+        #[case] status: Option<ResourceSyncStatus>,
+        #[case] expected: &Time,
+    ) {
+        let result = sync_failing_transition_time(&status);
+        let diff = result.0 - expected.0;
+
+        assert!(diff.le(&TimeDelta::minutes(1)))
+    }
+}
