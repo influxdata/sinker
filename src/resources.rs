@@ -174,13 +174,13 @@ mod tests {
         ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::new()), ..Default::default()},spec: Default::default(),status: None,}, false
     )]
     #[case::force_delete_annotation_is_false(
-        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "false".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
+        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), false.to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
     )]
     #[case::force_delete_annotation_is_other(
         ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "other".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
     )]
     #[case::force_delete_annotation_is_true(
-        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "true".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, true
+        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), true.to_string())])), ..Default::default()},spec: Default::default(),status: None,}, true
     )]
     #[tokio::test]
     async fn test_resource_sync_has_force_delete_option_enabled(
