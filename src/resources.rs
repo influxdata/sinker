@@ -9,6 +9,20 @@ use kube::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+static FORCE_DELETE_ANNOTATION: &str = "sinker.influxdata.io/force-delete";
+
+impl ResourceSync {
+    pub fn has_force_delete_option_enabled(&self) -> bool {
+        self.metadata
+            .annotations
+            .as_ref()
+            .map(|annotations| annotations[FORCE_DELETE_ANNOTATION].clone())
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or_default()
+    }
+}
+
 #[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
 #[kube(
     group = "sinker.influxdata.io",
