@@ -16,7 +16,9 @@ impl ResourceSync {
         self.metadata
             .annotations
             .as_ref()
-            .map(|annotations| annotations[FORCE_DELETE_ANNOTATION].clone())
+            .map(|annotations| annotations.get(FORCE_DELETE_ANNOTATION))
+            .unwrap_or_default()
+            .cloned()
             .unwrap_or_default()
             .parse()
             .unwrap_or_default()
@@ -154,5 +156,37 @@ impl SinkerContainer {
             })
         });
         crd
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use rstest::rstest;
+    use std::collections::BTreeMap;
+
+    #[rstest]
+    #[case::no_annotations(
+        ResourceSync{metadata: Default::default(),spec: Default::default(),status: None,}, false
+    )]
+    #[case::force_delete_annotation_not_present(
+        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::new()), ..Default::default()},spec: Default::default(),status: None,}, false
+    )]
+    #[case::force_delete_annotation_is_false(
+        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "false".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
+    )]
+    #[case::force_delete_annotation_is_other(
+        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "other".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
+    )]
+    #[case::force_delete_annotation_is_true(
+        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "true".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, true
+    )]
+    #[tokio::test]
+    async fn test_resource_sync_has_force_delete_option_enabled(
+        #[case] resource_sync: ResourceSync,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(resource_sync.has_force_delete_option_enabled(), expected);
     }
 }
