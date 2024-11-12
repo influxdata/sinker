@@ -207,43 +207,13 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
         .ok_or(Error::NameRequired)?;
     let parent_api = resource_sync.api(ctx.client.clone());
 
-    let result = {
-        let resource_sync = Arc::clone(&resource_sync);
-
-        info!(?name, "running reconciler");
-
-        debug!(?resource_sync.spec, "got");
-        let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
-
-        let (source_api, target_api) =
-            match source_and_target_apis(&resource_sync, &ctx, local_ns).await {
-                Ok(apis) => apis,
-                Err(_)
-                    if resource_sync.has_force_delete_option_enabled()
-                        && resource_sync.has_been_deleted() =>
-                {
-                    debug!(?name, "force-deleting ResourceSync");
-                    return stop_watches_and_remove_resource_sync_finalizers(
-                        resource_sync,
-                        &name,
-                        &parent_api,
-                        ctx,
-                    )
-                    .await;
-                }
-                Err(err) => return Err(err),
-            };
-
-        match resource_sync {
-            resource_sync if resource_sync.has_been_deleted() => {
-                reconcile_deleted_resource(resource_sync, &name, target_api, &parent_api, ctx).await
-            }
-            resource_sync if !resource_sync.has_target_finalizer() => {
-                add_target_finalizer(resource_sync, &name, &parent_api).await
-            }
-            _ => reconcile_normally(resource_sync, &name, source_api, target_api, ctx).await,
-        }
-    };
+    let result = reconcile_helper(
+        Arc::clone(&resource_sync),
+        Arc::clone(&ctx),
+        &name,
+        &parent_api,
+    )
+    .await;
 
     let status = match &result {
         Err(err) => {
@@ -274,6 +244,49 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     }
 
     result
+}
+
+async fn reconcile_helper(
+    resource_sync: Arc<ResourceSync>,
+    ctx: Arc<Context>,
+    name: &String,
+    parent_api: &Api<ResourceSync>,
+) -> Result<Action> {
+    let resource_sync = Arc::clone(&resource_sync);
+
+    info!(?name, "running reconciler");
+
+    debug!(?resource_sync.spec, "got");
+    let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
+
+    let (source_api, target_api) =
+        match source_and_target_apis(&resource_sync, &ctx, local_ns).await {
+            Ok(apis) => apis,
+            Err(_)
+                if resource_sync.has_force_delete_option_enabled()
+                    && resource_sync.has_been_deleted() =>
+            {
+                debug!(?name, "force-deleting ResourceSync");
+                return stop_watches_and_remove_resource_sync_finalizers(
+                    resource_sync,
+                    name,
+                    parent_api,
+                    ctx,
+                )
+                .await;
+            }
+            Err(err) => return Err(err),
+        };
+
+    match resource_sync {
+        resource_sync if resource_sync.has_been_deleted() => {
+            reconcile_deleted_resource(resource_sync, name, target_api, parent_api, ctx).await
+        }
+        resource_sync if !resource_sync.has_target_finalizer() => {
+            add_target_finalizer(resource_sync, name, parent_api).await
+        }
+        _ => reconcile_normally(resource_sync, name, source_api, target_api, ctx).await,
+    }
 }
 
 async fn source_and_target_apis(
