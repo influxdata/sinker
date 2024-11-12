@@ -222,6 +222,7 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
                     if resource_sync.has_force_delete_option_enabled()
                         && resource_sync.has_been_deleted() =>
                 {
+                    debug!(?name, "force-deleting ResourceSync");
                     return stop_watches_and_remove_resource_sync_finalizers(
                         resource_sync,
                         &name,
