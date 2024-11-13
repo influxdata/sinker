@@ -71,28 +71,38 @@ async fn reconcile_deleted_resource(
             Ok(Action::await_change())
         }
         Err(kube::Error::Api(err)) if err.code == 404 => {
-            resource_sync.stop_remote_watches_if_watching(ctx).await;
-
-            let patched_finalizers = resource_sync
-                .finalizers_clone_or_empty()
-                .with_item_removed(&FINALIZER.to_string());
-
-            // Target has been deleted, remove the finalizer from the ResourceSync
-            let patch = Merge(json!({
-                "metadata": {
-                    "finalizers": patched_finalizers,
-                },
-            }));
-
-            parent_api
-                .patch(name, &PatchParams::default(), &patch)
-                .await?;
-
-            // We have removed our finalizer, so nothing more needs to be done
-            Ok(Action::await_change())
+            stop_watches_and_remove_resource_sync_finalizers(resource_sync, name, parent_api, ctx)
+                .await
         }
         Err(err) => Err(err.into()),
     }
+}
+
+async fn stop_watches_and_remove_resource_sync_finalizers(
+    resource_sync: Arc<ResourceSync>,
+    name: &str,
+    parent_api: &Api<ResourceSync>,
+    ctx: Arc<Context>,
+) -> Result<Action> {
+    resource_sync.stop_remote_watches_if_watching(ctx).await;
+
+    let patched_finalizers = resource_sync
+        .finalizers_clone_or_empty()
+        .with_item_removed(&FINALIZER.to_string());
+
+    // Target has been deleted, remove the finalizer from the ResourceSync
+    let patch = Merge(json!({
+        "metadata": {
+            "finalizers": patched_finalizers,
+        },
+    }));
+
+    parent_api
+        .patch(name, &PatchParams::default(), &patch)
+        .await?;
+
+    // We have removed our finalizer, so nothing more needs to be done
+    Ok(Action::await_change())
 }
 
 async fn add_target_finalizer(
@@ -197,35 +207,13 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
         .ok_or(Error::NameRequired)?;
     let parent_api = resource_sync.api(ctx.client.clone());
 
-    let result = {
-        let resource_sync = Arc::clone(&resource_sync);
-
-        info!(?name, "running reconciler");
-
-        debug!(?resource_sync.spec, "got");
-        let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
-
-        let target_api = resource_sync
-            .spec
-            .target
-            .api_for(ctx.client.clone(), &local_ns)
-            .await?;
-        let source_api = resource_sync
-            .spec
-            .source
-            .api_for(ctx.client.clone(), &local_ns)
-            .await?;
-
-        match resource_sync {
-            resource_sync if resource_sync.has_been_deleted() => {
-                reconcile_deleted_resource(resource_sync, &name, target_api, &parent_api, ctx).await
-            }
-            resource_sync if !resource_sync.has_target_finalizer() => {
-                add_target_finalizer(resource_sync, &name, &parent_api).await
-            }
-            _ => reconcile_normally(resource_sync, &name, source_api, target_api, ctx).await,
-        }
-    };
+    let result = reconcile_helper(
+        Arc::clone(&resource_sync),
+        Arc::clone(&ctx),
+        &name,
+        &parent_api,
+    )
+    .await;
 
     let status = match &result {
         Err(err) => {
@@ -256,6 +244,68 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     }
 
     result
+}
+
+async fn reconcile_helper(
+    resource_sync: Arc<ResourceSync>,
+    ctx: Arc<Context>,
+    name: &String,
+    parent_api: &Api<ResourceSync>,
+) -> Result<Action> {
+    let resource_sync = Arc::clone(&resource_sync);
+
+    info!(?name, "running reconciler");
+
+    debug!(?resource_sync.spec, "got");
+    let local_ns = resource_sync.namespace().ok_or(Error::NamespaceRequired)?;
+
+    let (source_api, target_api) =
+        match source_and_target_apis(&resource_sync, &ctx, local_ns).await {
+            Ok(apis) => apis,
+            Err(_)
+                if resource_sync.has_force_delete_option_enabled()
+                    && resource_sync.has_been_deleted() =>
+            {
+                debug!(?name, "force-deleting ResourceSync");
+                return stop_watches_and_remove_resource_sync_finalizers(
+                    resource_sync,
+                    name,
+                    parent_api,
+                    ctx,
+                )
+                .await;
+            }
+            Err(err) => return Err(err),
+        };
+
+    match resource_sync {
+        resource_sync if resource_sync.has_been_deleted() => {
+            reconcile_deleted_resource(resource_sync, name, target_api, parent_api, ctx).await
+        }
+        resource_sync if !resource_sync.has_target_finalizer() => {
+            add_target_finalizer(resource_sync, name, parent_api).await
+        }
+        _ => reconcile_normally(resource_sync, name, source_api, target_api, ctx).await,
+    }
+}
+
+async fn source_and_target_apis(
+    resource_sync: &Arc<ResourceSync>,
+    ctx: &Arc<Context>,
+    local_ns: String,
+) -> Result<(NamespacedApi, NamespacedApi)> {
+    let target_api = resource_sync
+        .spec
+        .target
+        .api_for(ctx.client.clone(), &local_ns)
+        .await?;
+    let source_api = resource_sync
+        .spec
+        .source
+        .api_for(ctx.client.clone(), &local_ns)
+        .await?;
+
+    Ok((source_api, target_api))
 }
 
 fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>) -> Time {
