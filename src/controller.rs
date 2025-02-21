@@ -139,7 +139,14 @@ async fn reconcile_normally(
 
     let source = source_api
         .get(&resource_sync.spec.source.resource_ref.name)
-        .await?;
+        .await
+        .map_err(|e| {
+            crate::Error::ResourceNotFoundError(
+                resource_sync.spec.source.resource_ref.name.clone(),
+                source_api.ar.kind,
+                e,
+            )
+        })?;
     debug!(?source, "got source object");
 
     let target_ref = &resource_sync.spec.target.resource_ref;
