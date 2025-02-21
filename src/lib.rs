@@ -48,6 +48,9 @@ pub enum Error {
 
     #[error("Mapping block must contain from_field_path, to_field_path or both, cannot be empty")]
     MappingEmpty,
+
+    #[error("Resource {0} of kind {1} not found: {2}")]
+    ResourceNotFoundError(String, String, kube::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
