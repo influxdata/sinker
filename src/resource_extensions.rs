@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{ApiResource, DynamicObject};
+use kube::discovery::Scope::*;
 use kube::runtime::reflector::ObjectRef;
 use kube::{discovery, Api, Client, Config, ResourceExt};
 use tracing::debug;
@@ -135,28 +136,22 @@ async fn api_for(
     let client = cluster_client(cluster_ref, local_ns, client).await?;
 
     let resource_ref = &cluster_resource_ref.resource_ref;
-    let (ar, _) = discovery::pinned_kind(&client, &resource_ref.try_into()?).await?;
+    let (ar, capabilities) = discovery::pinned_kind(&client, &resource_ref.try_into()?).await?;
 
-    // if cluster_ref is a remote cluster and we don't specify a namespace in
-    // the config, use the default for that client.
-    // if cluster_ref is local, use local_ns.
-    let (api, namespace) = match cluster_ref {
-        Some(cluster) => match &cluster.namespace {
-            Some(namespace) => (
-                Api::namespaced_with(client, namespace, &ar),
-                Some(namespace.to_owned()),
-            ),
-            None => (
-                // assume cluster-scoped resource.
-                // TODO: should someday handle "default namespace for the kubeconfig being used"
-                Api::all_with(client, &ar),
-                None,
-            ),
+    let namespace = match capabilities.scope {
+        Cluster => None,
+        Namespaced => match cluster_ref {
+            None => Some(local_ns.to_owned()),
+            Some(cluster) => cluster.namespace.to_owned(),
         },
-        None => (
-            Api::namespaced_with(client, local_ns, &ar),
-            Some(local_ns.to_owned()),
-        ),
+    };
+
+    let api = match capabilities.scope {
+        Cluster => Api::all_with(client, &ar),
+        Namespaced => match &namespace {
+            None => Api::default_namespaced_with(client, &ar),
+            Some(ns) => Api::namespaced_with(client, ns, &ar),
+        },
     };
 
     Ok(NamespacedApi { api, ar, namespace })
