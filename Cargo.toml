@@ -21,7 +21,7 @@ kubert = { version = "0.21.2", features = [
     "rustls-tls",
     "prometheus-client",
 ] }
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.43", features = ["full"] }
 anyhow = { version = "1", features = ["backtrace"] }
 tracing = "0.1"
 schemars = "0.8.21"
