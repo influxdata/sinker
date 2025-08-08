@@ -106,8 +106,16 @@ async fn cluster_client(
             let sec = secrets.get(&secret_ref.name).await?;
 
             let kube_config = kube::config::Kubeconfig::from_yaml(
-                std::str::from_utf8(&sec.data.unwrap().get(&secret_ref.key).unwrap().0)
-                    .map_err(Error::KubeconfigUtf8Error)?,
+                std::str::from_utf8(
+                    &sec.data
+                        .unwrap()
+                        .get(&secret_ref.key)
+                        .ok_or_else(|| {
+                            Error::MissingKeyError(secret_ref.key.clone(), secret_ref.name.clone())
+                        })?
+                        .0,
+                )
+                .map_err(Error::KubeconfigUtf8Error)?,
             )?;
             let mut config =
                 Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
