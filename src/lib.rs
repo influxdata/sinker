@@ -16,6 +16,9 @@ pub enum Error {
     #[error("error parsing kubeconfig from secret")]
     KubeconfigUtf8Error(#[source] std::str::Utf8Error),
 
+    #[error("referenced key '{0}' does not exist in secret '{0}'")]
+    MissingKeyError(String, String),
+
     #[error("SerializationError: {0}")]
     SerializationError(#[from] serde_json::Error),
 
