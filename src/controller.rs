@@ -51,6 +51,16 @@ async fn reconcile_deleted_resource(
         return Ok(Action::await_change());
     }
 
+    if resource_sync.has_disable_target_deletion_option_enabled() {
+        return stop_watches_and_remove_resource_sync_finalizers(
+            resource_sync,
+            name,
+            parent_api,
+            ctx,
+        )
+        .await;
+    }
+
     let target_name = &resource_sync.spec.target.resource_ref.name;
 
     match target_api.get(target_name).await {
