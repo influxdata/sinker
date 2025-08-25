@@ -60,10 +60,12 @@ async fn reconcile_deleted_resource(
                 .await;
             Ok(Action::await_change())
         }
-        Ok(_) => {
-            target_api
-                .delete(target_name, &DeleteParams::foreground())
-                .await?;
+        Ok(target) => {
+            let delete_type = match target.metadata.finalizers {
+                Some(finalizers) if !finalizers.is_empty() => &DeleteParams::background(),
+                _ => &DeleteParams::foreground(),
+            };
+            target_api.delete(target_name, delete_type).await?;
 
             resource_sync
                 .start_remote_watches_if_not_watching(ctx)
