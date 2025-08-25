@@ -141,7 +141,7 @@ async fn reconcile_normally(
         .get(&resource_sync.spec.source.resource_ref.name)
         .await
         .map_err(|e| {
-            crate::Error::ResourceNotFoundError(
+            Error::ResourceNotFoundError(
                 resource_sync.spec.source.resource_ref.name.clone(),
                 source_api.ar.kind,
                 e,
