@@ -10,18 +10,25 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 static FORCE_DELETE_ANNOTATION: &str = "sinker.influxdata.io/force-delete";
+static DISABLE_TARGET_DELETION_ANNOTATION: &str = "sinker.influxdata.io/disable-target-deletion";
 
 impl ResourceSync {
-    pub fn has_force_delete_option_enabled(&self) -> bool {
+    fn get_boolean_annotation_val(&self, annotation: &str) -> bool {
         self.metadata
             .annotations
             .as_ref()
-            .map(|annotations| annotations.get(FORCE_DELETE_ANNOTATION))
+            .map(|annotations| annotations.get(annotation))
             .unwrap_or_default()
             .cloned()
             .unwrap_or_default()
             .parse()
             .unwrap_or_default()
+    }
+    pub fn has_force_delete_option_enabled(&self) -> bool {
+        self.get_boolean_annotation_val(FORCE_DELETE_ANNOTATION)
+    }
+    pub fn has_disable_target_deletion_option_enabled(&self) -> bool {
+        self.get_boolean_annotation_val(DISABLE_TARGET_DELETION_ANNOTATION)
     }
 }
 
@@ -162,31 +169,92 @@ impl SinkerContainer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use rstest::rstest;
-    use std::collections::BTreeMap;
 
-    #[rstest]
-    #[case::no_annotations(
-        ResourceSync{metadata: Default::default(),spec: Default::default(),status: None,}, false
-    )]
-    #[case::force_delete_annotation_not_present(
-        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::new()), ..Default::default()},spec: Default::default(),status: None,}, false
-    )]
-    #[case::force_delete_annotation_is_false(
-        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), false.to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
-    )]
-    #[case::force_delete_annotation_is_other(
-        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), "other".to_string())])), ..Default::default()},spec: Default::default(),status: None,}, false
-    )]
-    #[case::force_delete_annotation_is_true(
-        ResourceSync{metadata: ObjectMeta{annotations: Some(BTreeMap::from([(FORCE_DELETE_ANNOTATION.to_string(), true.to_string())])), ..Default::default()},spec: Default::default(),status: None,}, true
-    )]
-    #[tokio::test]
-    async fn test_resource_sync_has_force_delete_option_enabled(
-        #[case] resource_sync: ResourceSync,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(resource_sync.has_force_delete_option_enabled(), expected);
+    macro_rules! gen_option_flag_tests {
+        ($test_name:ident, $method:ident, $annotation_key:expr) => {
+            #[rstest]
+            #[case::no_annotations(
+                ResourceSync {
+                    metadata: Default::default(),
+                    spec: Default::default(),
+                    status: None,
+                },
+                false
+            )]
+            #[case::annotation_not_present(
+                ResourceSync {
+                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                        annotations: Some(std::collections::BTreeMap::new()),
+                        ..Default::default()
+                    },
+                    spec: Default::default(),
+                    status: None,
+                },
+                false
+            )]
+            #[case::annotation_is_false(
+                ResourceSync {
+                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                        annotations: Some(std::collections::BTreeMap::from([(
+                            $annotation_key.to_string(),
+                            false.to_string()
+                        )])),
+                        ..Default::default()
+                    },
+                    spec: Default::default(),
+                    status: None,
+                },
+                false
+            )]
+            #[case::annotation_is_other(
+                ResourceSync {
+                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                        annotations: Some(std::collections::BTreeMap::from([(
+                            $annotation_key.to_string(),
+                            "other".to_string()
+                        )])),
+                        ..Default::default()
+                    },
+                    spec: Default::default(),
+                    status: None,
+                },
+                false
+            )]
+            #[case::annotation_is_true(
+                ResourceSync {
+                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                        annotations: Some(std::collections::BTreeMap::from([(
+                            $annotation_key.to_string(),
+                            true.to_string()
+                        )])),
+                        ..Default::default()
+                    },
+                    spec: Default::default(),
+                    status: None,
+                },
+                true
+            )]
+            #[tokio::test]
+            async fn $test_name(
+                #[case] resource_sync: ResourceSync,
+                #[case] expected: bool,
+            ) {
+                assert_eq!(resource_sync.$method(), expected);
+            }
+        };
     }
+
+    // Reuse the same cases for both annotation readers:
+    gen_option_flag_tests!(
+        test_resource_sync_has_force_delete_option_enabled,
+        has_force_delete_option_enabled,
+        FORCE_DELETE_ANNOTATION
+    );
+
+    gen_option_flag_tests!(
+        test_resource_sync_has_disable_target_deletion_option_enabled,
+        has_disable_target_deletion_option_enabled,
+        DISABLE_TARGET_DELETION_ANNOTATION
+    );
 }

@@ -51,6 +51,16 @@ async fn reconcile_deleted_resource(
         return Ok(Action::await_change());
     }
 
+    if resource_sync.has_disable_target_deletion_option_enabled() {
+        return stop_watches_and_remove_resource_sync_finalizers(
+            resource_sync,
+            name,
+            parent_api,
+            ctx,
+        )
+        .await;
+    }
+
     let target_name = &resource_sync.spec.target.resource_ref.name;
 
     match target_api.get(target_name).await {
@@ -60,10 +70,12 @@ async fn reconcile_deleted_resource(
                 .await;
             Ok(Action::await_change())
         }
-        Ok(_) => {
-            target_api
-                .delete(target_name, &DeleteParams::foreground())
-                .await?;
+        Ok(target) => {
+            let delete_type = match target.metadata.finalizers {
+                Some(finalizers) if !finalizers.is_empty() => &DeleteParams::background(),
+                _ => &DeleteParams::foreground(),
+            };
+            target_api.delete(target_name, delete_type).await?;
 
             resource_sync
                 .start_remote_watches_if_not_watching(ctx)
@@ -141,7 +153,7 @@ async fn reconcile_normally(
         .get(&resource_sync.spec.source.resource_ref.name)
         .await
         .map_err(|e| {
-            crate::Error::ResourceNotFoundError(
+            Error::ResourceNotFoundError(
                 resource_sync.spec.source.resource_ref.name.clone(),
                 source_api.ar.kind,
                 e,
