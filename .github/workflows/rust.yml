@@ -57,6 +57,7 @@ jobs:
           project: gg0kz3d1l3
           platforms: linux/amd64,linux/arm64
           push: true
+          pull: true
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
 
   publish:
