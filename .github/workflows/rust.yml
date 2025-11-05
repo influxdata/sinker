@@ -19,10 +19,12 @@ jobs:
         run: cargo build
       - name: Format
         run: |
+          set -eo pipefail
           cargo fmt
           test -z "$(git status --porcelain)" || (echo 'Changes detected after running cargo fmt'; git status; git --no-pager diff; false)
       - name: Generate
         run: |
+          set -eo pipefail
           cargo run -- manifests > manifests/crd.yml
           test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
       - name: Run tests
@@ -96,4 +98,7 @@ jobs:
           kustomize edit set image us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker=us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
       - name: Publish OCI Bundle
         run: |
-          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:${{ env.LAST_COMMIT_SHA }} -f - --source "$(git config --get remote.origin.url)" --revision ${{ env.LAST_COMMIT_SHA }}
+          set -eo pipefail
+          TIME_STAMP_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          TIME_STAMP="${TIME_STAMP_ISO//:/-}"
+          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:v1.0.0-${TIME_STAMP} -f - --source "$(git config --get remote.origin.url)" --revision ${{ env.LAST_COMMIT_SHA }}
