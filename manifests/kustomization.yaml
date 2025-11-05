@@ -1,0 +1,7 @@
+namespace: sinker
+resources:
+  - clusterrole.yml
+  - clusterrolebinding.yml
+  - crd.yml
+  - deployment.yml
+  - serviceaccount.yml

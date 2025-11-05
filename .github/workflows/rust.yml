@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,56 +12,46 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3
-      - uses: Swatinem/rust-cache@6fd3edff6979b79f87531400ad694fb7f2c84b1f # v2
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build
       - name: Format
         run: |
+          set -eo pipefail
           cargo fmt
           test -z "$(git status --porcelain)" || (echo 'Changes detected after running cargo fmt'; git status; git --no-pager diff; false)
       - name: Generate
         run: |
+          set -eo pipefail
           cargo run -- manifests > manifests/crd.yml
           test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
       - name: Run tests
         run: cargo test
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features
 
   pack:
     runs-on: ubuntu-latest
-
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       id-token: write
       # Allows pushing to the GitHub Container Registry
       packages: write
-
     steps:
-      - uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3
+      - uses: actions/checkout@v4
       - uses: depot/setup-action@v1
       - name: Login to GHCR
-        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a # v2
+        uses: docker/login-action@v3
         with:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
-        if: github.event_name != 'pull_request'
-
       - run: |
           echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Build
-        uses: depot/build-push-action@v1
-        with:
-          context: .
-          project: gg0kz3d1l3
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
-        if: github.event_name == 'pull_request'
-
       - name: Build & Push
         uses: depot/build-push-action@v1
         with:
@@ -69,5 +59,46 @@ jobs:
           project: gg0kz3d1l3
           platforms: linux/amd64,linux/arm64
           push: true
+          pull: true
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
-        if: github.event_name != 'pull_request'
+
+  publish:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - pack
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: us-docker.pkg.dev
+          username: _json_key
+          password: ${{ secrets.GAR_JSON_KEY }}
+      - run: |
+          echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+      - name: Install Dependencies
+        run: |
+          set -eo pipefail
+          # Kustomize
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | sudo bash
+          # FluxCD CLI
+          curl -s https://fluxcd.io/install.sh | sudo bash
+      - name: Update manifests image
+        working-directory: ./manifests
+        run: |
+          kustomize edit set image us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker=us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
+      - name: Publish OCI Bundle
+        run: |
+          set -eo pipefail
+          TIME_STAMP_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          TIME_STAMP="${TIME_STAMP_ISO//:/-}"
+          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:v1.0.0-${TIME_STAMP} -f - --source "$(git config --get remote.origin.url)" --revision ${{ env.LAST_COMMIT_SHA }}

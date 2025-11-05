@@ -1,0 +1,67 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: sinker
+  name: sinker
+  namespace: sinker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sinker
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: sinker
+      labels:
+        app.kubernetes.io/name: sinker
+    spec:
+      containers:
+        - args: [ ]
+          env: [ ]
+          image: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:replace_me
+          imagePullPolicy: Always
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: admin
+            timeoutSeconds: 2
+          name: sinker
+          ports:
+            - containerPort: 8080
+              name: admin
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: admin
+            timeoutSeconds: 2
+          resources:
+            limits:
+              cpu: "8"
+              memory: 3G
+            requests:
+              cpu: "2"
+              memory: 3G
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          volumeMounts: [ ]
+      imagePullSecrets:
+        - name: gar-auth-sinker
+      initContainers: [ ]
+      #      priorityClassName: influxdata-app-critical # TODO
+      securityContext:
+        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
+        # This ensures that deployments meet the highest security requirements for Kubernetes.
+        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: sinker
+      volumes: [ ]

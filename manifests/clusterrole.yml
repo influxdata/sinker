@@ -1,0 +1,48 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sinker
+rules:
+  - apiGroups:
+      - sinker.influxdata.io
+    resources:
+      - resourcesyncs/status
+      - sinkercontainers/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - sinker.influxdata.io
+    resources:
+      - resourcesyncs
+      - sinkercontainers
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - sinker.influxdata.io
+    resources:
+      - resourcesyncs/finalizers
+      - sinkercontainers/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - secrets
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
