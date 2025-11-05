@@ -12,7 +12,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -33,13 +32,13 @@ jobs:
 
   pack:
     runs-on: ubuntu-latest
-
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       id-token: write
       # Allows pushing to the GitHub Container Registry
       packages: write
-
     steps:
       - uses: actions/checkout@v4
       - uses: depot/setup-action@v1
@@ -49,21 +48,8 @@ jobs:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
       - run: |
           echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Build
-        uses: depot/build-push-action@v1
-        with:
-          context: .
-          project: gg0kz3d1l3
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
-        if: github.event_name == 'pull_request'
-
       - name: Build & Push
         uses: depot/build-push-action@v1
         with:
@@ -72,7 +58,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
   publish:
     runs-on: ubuntu-latest
     needs:
