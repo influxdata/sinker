@@ -81,6 +81,8 @@ jobs:
           registry: us-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
+      - run: |
+          echo "LAST_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
       - name: Install Dependencies
         run: |
           set -eo pipefail
