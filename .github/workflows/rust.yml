@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3
-      - uses: Swatinem/rust-cache@6fd3edff6979b79f87531400ad694fb7f2c84b1f # v2
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build
       - name: Format
@@ -28,6 +28,7 @@ jobs:
           test -z "$(git status --porcelain)" || (echo 'Changes detected after generating manifests'; git status; git --no-pager diff; false)
       - name: Run tests
         run: cargo test
+      # TODO: Add clippy step
 
   pack:
     runs-on: ubuntu-latest
@@ -39,10 +40,10 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3
+      - uses: actions/checkout@v4
       - uses: depot/setup-action@v1
       - name: Login to GHCR
-        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a # v2
+        uses: docker/login-action@v3
         with:
           registry: us-docker.pkg.dev
           username: _json_key
@@ -71,3 +72,38 @@ jobs:
           push: true
           tags: us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
         if: github.event_name != 'pull_request'
+  publish:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - pack
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: us-docker.pkg.dev
+          username: _json_key
+          password: ${{ secrets.GAR_JSON_KEY }}
+      - name: Install Dependencies
+        run: |
+          set -eo pipefail
+          # Kustomize
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | sudo bash
+          # FluxCD CLI
+          curl -s https://fluxcd.io/install.sh | sudo bash
+      - name: Update manifests image
+        working-directory: ./manifests
+        run: |
+          kustomize edit set image us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker=us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
+      - name: Publish OCI Bundle
+        run: |
+          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:${{ env.LAST_COMMIT_SHA }}
