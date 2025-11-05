@@ -96,4 +96,4 @@ jobs:
           kustomize edit set image us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker=us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker:${{ env.LAST_COMMIT_SHA }}
       - name: Publish OCI Bundle
         run: |
-          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:${{ env.LAST_COMMIT_SHA }}
+          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:${{ env.LAST_COMMIT_SHA }} -f - --source "$(git config --get remote.origin.url)" --revision ${{ env.LAST_COMMIT_SHA }}
