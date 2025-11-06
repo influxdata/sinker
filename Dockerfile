@@ -35,4 +35,5 @@ USER sinker
 
 WORKDIR app
 COPY --from=builder /app/target/release/sinker /usr/local/bin
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/sinker"]
