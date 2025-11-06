@@ -103,4 +103,4 @@ jobs:
           set -eo pipefail
           TIME_STAMP_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           TIME_STAMP="${TIME_STAMP_ISO//:/-}"
-          kustomize build manifests/ | flux push artifact oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:v1.0.0-${TIME_STAMP} -f - --source "$(git config --get remote.origin.url)" --revision ${{ env.LAST_COMMIT_SHA }}
+          kustomize build manifests/ | flux push artifact "oci://us-docker.pkg.dev/influxdb2-artifacts/tubernetes/sinker-manifests:$(git describe --tags --abbrev=0)-${TIME_STAMP}" -f - --source "$(git config --get remote.origin.url)" --revision ${{ env.LAST_COMMIT_SHA }}
