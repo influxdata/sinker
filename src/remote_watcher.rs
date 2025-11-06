@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use backoff::backoff::Backoff;
 use futures::{StreamExt, TryStreamExt};
 use kube::api::WatchParams;
 use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
+use kube::runtime::utils::Backoff;
 use kube::runtime::watcher::DefaultBackoff;
 use kube::Resource;
 use kubert::client::Client;
@@ -34,7 +34,7 @@ macro_rules! send_reconcile_on_fail {
     ($self:expr, $backoff:expr, $($arg:tt)*) =>{
         $self.send_reconcile();
         error!($($arg)*);
-        sleep($backoff.next_backoff().unwrap_or(Duration::from_secs(5))).await;
+        sleep($backoff.next().unwrap_or(Duration::from_secs(5))).await;
     };
 }
 
