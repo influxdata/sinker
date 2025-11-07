@@ -16,9 +16,9 @@ COPY . .
 RUN cargo build --release --bin sinker
 
 # We do not need the Rust toolchain to run the binary!
-FROM gcr.io/distroless/base-nossl-debian12
+FROM gcr.io/distroless/cc-debian12
 
 WORKDIR app
-COPY --from=builder /lib/x86_64-linux-gnu/libgcc_s.so.1 /lib/x86_64-linux-gnu/
 COPY --from=builder /app/target/release/sinker /usr/local/bin/sinker
+USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/sinker"]
