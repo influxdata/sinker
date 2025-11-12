@@ -20,5 +20,5 @@ FROM gcr.io/distroless/cc-debian12
 
 WORKDIR app
 COPY --from=builder /app/target/release/sinker /usr/local/bin/sinker
-USER nonroot:nonroot
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/sinker"]
