@@ -5,7 +5,7 @@ license = "MIT"
 edition = "2021"
 keywords = ["kubernetes"]
 repository = "https://github.com/influxdata/sinker"
-authors = ["Marko Mikulicic <mkm@influxdata.com>"]
+authors = ["InfluxData"]
 description = "Copy k8s resources (or parts thereof) across clusters"
 
 [dependencies]
