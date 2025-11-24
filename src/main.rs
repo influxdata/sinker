@@ -46,8 +46,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Manifests) => {
             println!(
                 "{}---\n{}",
-                serde_yaml::to_string(&sinker::resources::ResourceSync::crd()).unwrap(),
-                serde_yaml::to_string(&sinker::resources::SinkerContainer::crd_with_manual_schema()).unwrap()
+                serde_yaml::to_string(&sinker::resources::ResourceSync::crd())?,
+                serde_yaml::to_string(
+                    &sinker::resources::SinkerContainer::crd_with_manual_schema()
+                )?
             );
         }
         None => {

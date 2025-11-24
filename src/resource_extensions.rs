@@ -31,7 +31,7 @@ impl ResourceSync {
         self.metadata
             .finalizers
             .as_ref()
-            .map_or(false, |f| f.contains(&FINALIZER.to_string()))
+            .is_some_and(|f| f.contains(&FINALIZER.to_string()))
     }
 
     pub fn api(&self, client: Client) -> Api<Self> {
@@ -101,7 +101,13 @@ async fn cluster_client(
     let client = match cluster_ref {
         None => client,
         Some(cluster_ref) => {
-            let secrets: Api<Secret> = Api::namespaced(client, local_ns);
+            let secret_ns = cluster_ref
+                .kube_config
+                .secret_ref
+                .namespace
+                .as_deref()
+                .unwrap_or(local_ns);
+            let secrets: Api<Secret> = Api::namespaced(client, secret_ns);
             let secret_ref = &cluster_ref.kube_config.secret_ref;
             let sec = secrets.get(&secret_ref.name).await?;
 
@@ -111,7 +117,11 @@ async fn cluster_client(
                         .unwrap()
                         .get(&secret_ref.key)
                         .ok_or_else(|| {
-                            Error::MissingKeyError(secret_ref.key.clone(), secret_ref.name.clone())
+                            Error::MissingKeyError(
+                                secret_ref.key.clone(),
+                                secret_ref.name.clone(),
+                                secret_ns.to_string(),
+                            )
                         })?
                         .0,
                 )

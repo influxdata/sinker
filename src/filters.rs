@@ -29,7 +29,7 @@ mod tests {
     use chrono::TimeZone;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ManagedFieldsEntry, ObjectMeta, Time};
     use once_cell::sync::Lazy;
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use rand::Rng;
     use rstest::*;
 
@@ -39,7 +39,7 @@ mod tests {
         ($len:expr) => {
             Lazy::new(|| {
                 iter::repeat(())
-                    .map(|()| rand::thread_rng().sample(Alphanumeric))
+                    .map(|()| rand::rng().sample::<u8, _>(Alphanumeric))
                     .filter(|c| c.is_ascii_alphabetic())
                     .take($len)
                     .map(char::from)
