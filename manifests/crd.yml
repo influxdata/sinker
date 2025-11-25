@@ -50,9 +50,6 @@ spec:
                                 type: string
                               name:
                                 type: string
-                              namespace:
-                                nullable: true
-                                type: string
                             required:
                             - key
                             - name
@@ -100,9 +97,6 @@ spec:
                               key:
                                 type: string
                               name:
-                                type: string
-                              namespace:
-                                nullable: true
                                 type: string
                             required:
                             - key
