@@ -125,7 +125,6 @@ pub struct KubeConfig {
 #[serde(rename_all = "camelCase")]
 pub struct SecretRef {
     pub name: String,
-    pub namespace: Option<String>,
     pub key: String,
 }
 

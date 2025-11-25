@@ -101,13 +101,7 @@ async fn cluster_client(
     let client = match cluster_ref {
         None => client,
         Some(cluster_ref) => {
-            let secret_ns = cluster_ref
-                .kube_config
-                .secret_ref
-                .namespace
-                .as_deref()
-                .unwrap_or(local_ns);
-            let secrets: Api<Secret> = Api::namespaced(client, secret_ns);
+            let secrets: Api<Secret> = Api::namespaced(client, local_ns);
             let secret_ref = &cluster_ref.kube_config.secret_ref;
             let sec = secrets.get(&secret_ref.name).await?;
 
@@ -120,7 +114,7 @@ async fn cluster_client(
                             Error::MissingKeyError(
                                 secret_ref.key.clone(),
                                 secret_ref.name.clone(),
-                                secret_ns.to_string(),
+                                local_ns.to_string(),
                             )
                         })?
                         .0,
