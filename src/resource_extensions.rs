@@ -204,3 +204,146 @@ impl ClusterResourceRef {
         api_for(self, local_ns, client).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::future::join_all;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+    use rstest::rstest;
+    use std::collections::BTreeMap;
+
+    fn secret_with_annotation(value: Option<&str>) -> Secret {
+        Secret {
+            metadata: ObjectMeta {
+                annotations: value.map(|v| {
+                    BTreeMap::from([(ALLOWED_NAMESPACES_ANNOTATION.to_string(), v.to_string())])
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    fn errs_when_annotation_missing() {
+        let sec = secret_with_annotation(None);
+
+        let res = verify_kubeconfig_secret_access("dev", &sec);
+
+        assert!(matches!(res, Err(UnauthorizedKubeconfigAccess())));
+    }
+
+    #[rstest]
+    fn errs_when_annotation_key_absent() {
+        let sec = Secret {
+            metadata: ObjectMeta {
+                annotations: Some(BTreeMap::from([(
+                    "other-annotation".to_string(),
+                    "^.*$".to_string(),
+                )])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let res = verify_kubeconfig_secret_access("ns1", &sec);
+
+        assert!(matches!(res, Err(UnauthorizedKubeconfigAccess())));
+    }
+
+    #[rstest]
+    #[case::unbalanced_paren("(")]
+    #[case::dangling_escape("\\")]
+    fn errs_on_invalid_regex(#[case] pattern: &str) {
+        let sec = secret_with_annotation(Some(pattern));
+
+        let res = verify_kubeconfig_secret_access("random", &sec);
+
+        assert!(matches!(res, Err(UnauthorizedKubeconfigAccess())));
+    }
+
+    #[rstest]
+    fn allows_matching_namespace_randomized() {
+        let pattern = "^ns-[a-z0-9]{4}$";
+        let sec = secret_with_annotation(Some(pattern));
+        let mut rng = StdRng::seed_from_u64(42);
+
+        for _ in 0..8 {
+            let tail: String = (0..4)
+                .map(|_| rng.sample(Alphanumeric) as char)
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            let ns = format!("ns-{}", tail);
+
+            let res = verify_kubeconfig_secret_access(&ns, &sec);
+
+            assert!(res.is_ok(), "{} should match {}", ns, pattern);
+        }
+    }
+
+    #[rstest]
+    fn denies_non_matching_namespace_randomized() {
+        let pattern = "^team-[0-9]{2}$";
+        let sec = secret_with_annotation(Some(pattern));
+        let mut rng = StdRng::seed_from_u64(84);
+
+        for _ in 0..6 {
+            let ns = format!("proj-{}", rng.random_range(10_u8..99_u8));
+
+            let res = verify_kubeconfig_secret_access(&ns, &sec);
+
+            assert!(matches!(res, Err(UnauthorizedKubeconfigAccess())));
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_checks_are_independent() {
+        let allow_secret = secret_with_annotation(Some("^ok-[a-z]{2}$"));
+        let deny_secret = secret_with_annotation(Some("^deny$"));
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let inputs: Vec<_> = (0..6)
+            .map(|i| {
+                let expect_ok = i % 2 == 0;
+                let sec = if expect_ok {
+                    allow_secret.clone()
+                } else {
+                    deny_secret.clone()
+                };
+                let ns = if expect_ok {
+                    let part: String = (0..2)
+                        .map(|_| rng.sample(Alphanumeric) as char)
+                        .map(|c| c.to_ascii_lowercase())
+                        .collect();
+                    format!("ok-{}", part)
+                } else {
+                    format!("bad-{}", rng.random::<u8>())
+                };
+                (ns, expect_ok, sec)
+            })
+            .collect();
+
+        let handles: Vec<_> = inputs
+            .into_iter()
+            .map(|(ns, expect_ok, sec)| {
+                tokio::spawn(async move {
+                    let res = verify_kubeconfig_secret_access(&ns, &sec);
+                    (expect_ok, res)
+                })
+            })
+            .collect();
+
+        let outcomes = join_all(handles).await;
+
+        for outcome in outcomes {
+            let (expect_ok, res) = outcome.expect("task panicked");
+            if expect_ok {
+                assert!(res.is_ok(), "expected {:?} to be authorized", res);
+            } else {
+                assert!(matches!(res, Err(UnauthorizedKubeconfigAccess())));
+            }
+        }
+    }
+}
