@@ -101,54 +101,66 @@ async fn cluster_client(
     local_ns: &str,
     client: Client,
 ) -> crate::Result<Client> {
-    let client = match cluster_ref {
-        None => client,
-        Some(cluster_ref) => {
-            let secret_ns = cluster_ref
-                .kube_config
-                .secret_ref
-                .namespace
-                .as_deref()
-                .unwrap_or(local_ns);
-            let secrets: Api<Secret> = Api::namespaced(client, secret_ns);
-            let secret_ref = &cluster_ref.kube_config.secret_ref;
-            let sec = secrets.get(&secret_ref.name).await?;
+    let client =
+        match cluster_ref {
+            None => client,
+            Some(cluster_ref) => {
+                let secret_ns = cluster_ref
+                    .kube_config
+                    .secret_ref
+                    .namespace
+                    .as_deref()
+                    .unwrap_or(local_ns);
+                let secrets: Api<Secret> = Api::namespaced(client, secret_ns);
+                let secret_ref = &cluster_ref.kube_config.secret_ref;
+                let sec = secrets.get(&secret_ref.name).await.map_err(|e| {
+                    match secret_ns == local_ns {
+                        true => crate::Error::from(e),
+                        false => {
+                            debug!(
+                                "error accessing kubeconfig secret in remote namespace: {}",
+                                e
+                            );
+                            UnauthorizedKubeconfigAccess()
+                        }
+                    }
+                })?;
 
-            if secret_ns != local_ns {
-                verify_kubeconfig_secret_access(local_ns, &sec)?;
+                if secret_ns != local_ns {
+                    verify_kubeconfig_secret_access(local_ns, &sec)?;
+                }
+
+                let kube_config = kube::config::Kubeconfig::from_yaml(
+                    std::str::from_utf8(
+                        &sec.data
+                            .unwrap()
+                            .get(&secret_ref.key)
+                            .ok_or_else(|| {
+                                Error::MissingKeyError(
+                                    secret_ref.key.clone(),
+                                    secret_ref.name.clone(),
+                                    secret_ns.to_string(),
+                                )
+                            })?
+                            .0,
+                    )
+                    .map_err(Error::KubeconfigUtf8Error)?,
+                )?;
+                let mut config =
+                    Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
+
+                if let Some(ref namespace) = cluster_ref.namespace {
+                    config.default_namespace = namespace.clone();
+                }
+
+                debug!(?config.cluster_url, "connecting to remote cluster");
+                let remote_client = kube::Client::try_from(config)?;
+                let version = remote_client.apiserver_version().await?;
+                debug!(?version, "remote cluster version");
+
+                remote_client
             }
-
-            let kube_config = kube::config::Kubeconfig::from_yaml(
-                std::str::from_utf8(
-                    &sec.data
-                        .unwrap()
-                        .get(&secret_ref.key)
-                        .ok_or_else(|| {
-                            Error::MissingKeyError(
-                                secret_ref.key.clone(),
-                                secret_ref.name.clone(),
-                                secret_ns.to_string(),
-                            )
-                        })?
-                        .0,
-                )
-                .map_err(Error::KubeconfigUtf8Error)?,
-            )?;
-            let mut config =
-                Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
-
-            if let Some(ref namespace) = cluster_ref.namespace {
-                config.default_namespace = namespace.clone();
-            }
-
-            debug!(?config.cluster_url, "connecting to remote cluster");
-            let remote_client = kube::Client::try_from(config)?;
-            let version = remote_client.apiserver_version().await?;
-            debug!(?version, "remote cluster version");
-
-            remote_client
-        }
-    };
+        };
     Ok(client)
 }
 
