@@ -115,19 +115,7 @@ async fn cluster_client(
             let sec = secrets.get(&secret_ref.name).await?;
 
             if secret_ns != local_ns {
-                let allowed_namespaces = sec
-                    .metadata
-                    .annotations
-                    .as_ref()
-                    .and_then(|annotations| annotations.get(ALLOWED_NAMESPACES_ANNOTATION))
-                    .ok_or(UnauthorizedKubeconfigAccess())?;
-                let re = Regex::new(allowed_namespaces).map_err(|e| {
-                    debug!("invalid regex in allowed namespaces annotation: {}", e);
-                    UnauthorizedKubeconfigAccess()
-                })?;
-                if !re.is_match(local_ns) {
-                    return Err(UnauthorizedKubeconfigAccess());
-                }
+                verify_kubeconfig_secret_access(local_ns, &sec)?;
             }
 
             let kube_config = kube::config::Kubeconfig::from_yaml(
@@ -162,6 +150,23 @@ async fn cluster_client(
         }
     };
     Ok(client)
+}
+
+fn verify_kubeconfig_secret_access(local_ns: &str, sec: &Secret) -> crate::Result<()> {
+    let allowed_namespaces = sec
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(ALLOWED_NAMESPACES_ANNOTATION))
+        .ok_or(UnauthorizedKubeconfigAccess())?;
+    let re = Regex::new(allowed_namespaces).map_err(|e| {
+        debug!("invalid regex in allowed namespaces annotation: {}", e);
+        UnauthorizedKubeconfigAccess()
+    })?;
+    match re.is_match(local_ns) {
+        true => Ok(()),
+        false => Err(UnauthorizedKubeconfigAccess()),
+    }
 }
 
 async fn api_for(
