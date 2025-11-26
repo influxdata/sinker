@@ -1,17 +1,20 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::controller::Context;
+use crate::remote_watcher::RemoteWatcherKey;
+use crate::resources::{
+    ClusterRef, ClusterResourceRef, ResourceSync, ALLOWED_NAMESPACES_ANNOTATION,
+};
+use crate::Error::UnauthorizedKubeconfigAccess;
+use crate::{Error, FINALIZER};
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{ApiResource, DynamicObject};
 use kube::discovery::Scope::*;
 use kube::runtime::reflector::ObjectRef;
 use kube::{discovery, Api, Client, Config, ResourceExt};
+use regex::Regex;
 use tracing::debug;
-
-use crate::controller::Context;
-use crate::remote_watcher::RemoteWatcherKey;
-use crate::resources::{ClusterRef, ClusterResourceRef, ResourceSync};
-use crate::{Error, FINALIZER};
 
 macro_rules! rs_watch {
     ($fn_name:ident, $method:ident) => {
@@ -110,6 +113,22 @@ async fn cluster_client(
             let secrets: Api<Secret> = Api::namespaced(client, secret_ns);
             let secret_ref = &cluster_ref.kube_config.secret_ref;
             let sec = secrets.get(&secret_ref.name).await?;
+
+            if secret_ns != local_ns {
+                let allowed_namespaces = sec
+                    .metadata
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.get(ALLOWED_NAMESPACES_ANNOTATION))
+                    .ok_or(UnauthorizedKubeconfigAccess())?;
+                let re = Regex::new(allowed_namespaces).map_err(|e| {
+                    debug!("invalid regex in allowed namespaces annotation: {}", e);
+                    UnauthorizedKubeconfigAccess()
+                })?;
+                if !re.is_match(local_ns) {
+                    return Err(UnauthorizedKubeconfigAccess());
+                }
+            }
 
             let kube_config = kube::config::Kubeconfig::from_yaml(
                 std::str::from_utf8(
