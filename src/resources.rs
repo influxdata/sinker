@@ -9,8 +9,9 @@ use kube::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-static FORCE_DELETE_ANNOTATION: &str = "sinker.influxdata.io/force-delete";
-static DISABLE_TARGET_DELETION_ANNOTATION: &str = "sinker.influxdata.io/disable-target-deletion";
+pub const FORCE_DELETE_ANNOTATION: &str = "sinker.influxdata.io/force-delete";
+pub const DISABLE_TARGET_DELETION_ANNOTATION: &str = "sinker.influxdata.io/disable-target-deletion";
+pub const ALLOWED_NAMESPACES_ANNOTATION: &str = "sinker.influxdata.io/allowed-namespaces";
 
 impl ResourceSync {
     fn get_boolean_annotation_val(&self, annotation: &str) -> bool {

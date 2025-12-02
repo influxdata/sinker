@@ -54,6 +54,9 @@ pub enum Error {
 
     #[error("Resource {0} of kind {1} not found: {2}")]
     ResourceNotFoundError(String, String, kube::Error),
+
+    #[error("Referenced Kubeconfig Secret cannot be accessed due to namespace restrictions")]
+    UnauthorizedKubeconfigAccess(),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
