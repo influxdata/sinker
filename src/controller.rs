@@ -26,7 +26,7 @@ use crate::resource_extensions::NamespacedApi;
 use crate::resources::ResourceSyncStatus;
 use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZER};
 
-static RESOURCE_SYNC_FAILING_CONDITION: &str = "ResourceSyncFailing";
+const RESOURCE_SYNC_FAILING_CONDITION: &str = "ResourceSyncFailing";
 
 pub struct Context {
     pub client: Client,
