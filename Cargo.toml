@@ -21,7 +21,7 @@ kubert = { version = "^0.25.0", features = [
     "prometheus-client",
 ] }
 tokio = { version = "^1.49.0", features = ["full"] }
-anyhow = { version = "^1.0.100", features = ["backtrace"] }
+anyhow = { version = "^1.0.102", features = ["backtrace"] }
 tracing = "^0.1.44"
 schemars = "^0.8.22"
 serde = { version = "^1.0.228", features = ["derive"] }
