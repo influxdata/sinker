@@ -235,9 +235,10 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     )
     .await;
 
-    let status = reconcile_status(&resource_sync, &result);
-
-    if status != resource_sync.status {
+    // Always write the status. Deciding off the cached resource_sync.status races with our own
+    // patches: a retry can start before the cache has seen the previous write, skip the patch, and
+    // leave the condition latched at the wrong value. A no-op patch does not bump resourceVersion.
+    if let Some(status) = reconcile_status(&resource_sync, &result) {
         parent_api
             .patch_status(
                 &name,
@@ -326,7 +327,7 @@ fn reconcile_status(
             )]),
         }),
         // A successful reconcile must reset the condition to False rather than leave the last
-        // failure latched. Skip this for deleted resources; their finalizer may already be gone.
+        // failure latched.
         Ok(_) if !resource_sync.has_been_deleted() => Some(ResourceSyncStatus {
             conditions: Some(vec![sync_failing_condition(
                 resource_sync,
@@ -335,7 +336,9 @@ fn reconcile_status(
                 "Sync succeeded".to_string(),
             )]),
         }),
-        Ok(_) => resource_sync.status.clone(),
+        // None means don't write: a deleted resource's finalizer may already be gone, so a status
+        // patch could 404.
+        Ok(_) => None,
     }
 }
 
@@ -511,10 +514,10 @@ mod tests {
     }
 
     #[test]
-    fn test_reconcile_status_ok_deleted_keeps_existing_status() {
+    fn test_reconcile_status_ok_deleted_skips_status_write() {
         let rs = resource_sync(true, status_with_condition("True"));
         let result: Result<Action> = Ok(Action::await_change());
 
-        assert_eq!(reconcile_status(&rs, &result), rs.status);
+        assert_eq!(reconcile_status(&rs, &result), None);
     }
 }
