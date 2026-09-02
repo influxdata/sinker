@@ -235,10 +235,17 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     )
     .await;
 
-    // Always write the status. Deciding off the cached resource_sync.status races with our own
-    // patches: a retry can start before the cache has seen the previous write, skip the patch, and
-    // leave the condition latched at the wrong value. A no-op patch does not bump resourceVersion.
-    if let Some(status) = reconcile_status(&resource_sync, &result) {
+    // Always write the status, and compute it from the live object rather than the reflector
+    // cache. The cache can lag our own previous patch: deciding off it can skip the write and
+    // leave the condition latched, and carrying its stale condition over corrupts
+    // lastTransitionTime. Skip the get when we won't write; the object may already be gone.
+    let live_status = if result.is_err() || !resource_sync.has_been_deleted() {
+        parent_api.get_status(&name).await?.status
+    } else {
+        None
+    };
+
+    if let Some(status) = reconcile_status(&resource_sync, &live_status, &result) {
         parent_api
             .patch_status(
                 &name,
@@ -315,12 +322,14 @@ async fn source_and_target_apis(
 
 fn reconcile_status(
     resource_sync: &ResourceSync,
+    live_status: &Option<ResourceSyncStatus>,
     result: &Result<Action>,
 ) -> Option<ResourceSyncStatus> {
     match result {
         Err(err) => Some(ResourceSyncStatus {
             conditions: Some(vec![sync_failing_condition(
                 resource_sync,
+                live_status,
                 "True",
                 RESOURCE_SYNC_FAILING_CONDITION,
                 err.to_string(),
@@ -331,6 +340,7 @@ fn reconcile_status(
         Ok(_) if !resource_sync.has_been_deleted() => Some(ResourceSyncStatus {
             conditions: Some(vec![sync_failing_condition(
                 resource_sync,
+                live_status,
                 "False",
                 RESOURCE_SYNC_SUCCEEDED_REASON,
                 "Sync succeeded".to_string(),
@@ -344,12 +354,13 @@ fn reconcile_status(
 
 fn sync_failing_condition(
     resource_sync: &ResourceSync,
+    live_status: &Option<ResourceSyncStatus>,
     status: &str,
     reason: &str,
     message: String,
 ) -> Condition {
     Condition {
-        last_transition_time: sync_failing_transition_time(&resource_sync.status, status),
+        last_transition_time: sync_failing_transition_time(live_status, status),
         message,
         observed_generation: resource_sync.metadata.generation,
         reason: reason.to_string(),
@@ -493,7 +504,7 @@ mod tests {
         let rs = resource_sync(false, None);
         let result: Result<Action> = Err(Error::NameRequired);
 
-        let condition = single_condition(reconcile_status(&rs, &result));
+        let condition = single_condition(reconcile_status(&rs, &rs.status, &result));
 
         assert_eq!(condition.type_, RESOURCE_SYNC_FAILING_CONDITION);
         assert_eq!(condition.status, "True");
@@ -506,7 +517,7 @@ mod tests {
         let rs = resource_sync(false, status_with_condition("True"));
         let result: Result<Action> = Ok(Action::await_change());
 
-        let condition = single_condition(reconcile_status(&rs, &result));
+        let condition = single_condition(reconcile_status(&rs, &rs.status, &result));
 
         assert_eq!(condition.type_, RESOURCE_SYNC_FAILING_CONDITION);
         assert_eq!(condition.status, "False");
@@ -514,10 +525,24 @@ mod tests {
     }
 
     #[test]
+    fn test_reconcile_status_uses_live_status_for_transition_time() {
+        // The cache still says True but the live object has already transitioned to False; the
+        // carried-over time must come from the live condition.
+        let rs = resource_sync(false, status_with_condition("True"));
+        let live_status = status_with_condition("False");
+        let result: Result<Action> = Ok(Action::await_change());
+
+        let condition = single_condition(reconcile_status(&rs, &live_status, &result));
+
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.last_transition_time, *EPOCH);
+    }
+
+    #[test]
     fn test_reconcile_status_ok_deleted_skips_status_write() {
         let rs = resource_sync(true, status_with_condition("True"));
         let result: Result<Action> = Ok(Action::await_change());
 
-        assert_eq!(reconcile_status(&rs, &result), None);
+        assert_eq!(reconcile_status(&rs, &rs.status, &result), None);
     }
 }
