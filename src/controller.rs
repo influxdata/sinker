@@ -27,6 +27,7 @@ use crate::resources::ResourceSyncStatus;
 use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZER};
 
 const RESOURCE_SYNC_FAILING_CONDITION: &str = "ResourceSyncFailing";
+const RESOURCE_SYNC_SUCCEEDED_REASON: &str = "ResourceSyncSucceeded";
 
 pub struct Context {
     pub client: Client,
@@ -235,21 +236,25 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     .await;
 
     let status = match &result {
-        Err(err) => {
-            let sync_failing_condition = Condition {
-                last_transition_time: sync_failing_transition_time(&(resource_sync.status)),
-                message: err.to_string(),
-                observed_generation: resource_sync.metadata.generation,
-                reason: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
-                status: "True".to_string(),
-                type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
-            };
-
-            Some(ResourceSyncStatus {
-                conditions: Some(vec![sync_failing_condition]),
-            })
-        }
-        _ => None,
+        Err(err) => Some(ResourceSyncStatus {
+            conditions: Some(vec![sync_failing_condition(
+                &resource_sync,
+                "True",
+                RESOURCE_SYNC_FAILING_CONDITION,
+                err.to_string(),
+            )]),
+        }),
+        // A successful reconcile must reset the condition to False rather than leave the last
+        // failure latched. Skip this for deleted resources; their finalizer may already be gone.
+        Ok(_) if !resource_sync.has_been_deleted() => Some(ResourceSyncStatus {
+            conditions: Some(vec![sync_failing_condition(
+                &resource_sync,
+                "False",
+                RESOURCE_SYNC_SUCCEEDED_REASON,
+                "Sync succeeded".to_string(),
+            )]),
+        }),
+        Ok(_) => resource_sync.status.clone(),
     };
 
     if status != resource_sync.status {
@@ -327,23 +332,38 @@ async fn source_and_target_apis(
     Ok((source_api, target_api))
 }
 
-fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>) -> Time {
+fn sync_failing_condition(
+    resource_sync: &ResourceSync,
+    status: &str,
+    reason: &str,
+    message: String,
+) -> Condition {
+    Condition {
+        last_transition_time: sync_failing_transition_time(&resource_sync.status, status),
+        message,
+        observed_generation: resource_sync.metadata.generation,
+        reason: reason.to_string(),
+        status: status.to_string(),
+        type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
+    }
+}
+
+// The transition time is only carried over while the condition value is unchanged; a True<->False
+// flip records a new transition.
+fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>, new_status: &str) -> Time {
     let now = Time(Utc::now());
 
-    match status {
-        None => now,
-        Some(status) => match &status.conditions {
-            None => now,
-            Some(conditions) => {
-                let sync_failing_condition = conditions
-                    .iter()
-                    .find(|c| c.type_ == RESOURCE_SYNC_FAILING_CONDITION);
-                sync_failing_condition
-                    .map(|c| c.last_transition_time.clone())
-                    .unwrap_or(now)
-            }
-        },
-    }
+    status
+        .as_ref()
+        .and_then(|status| status.conditions.as_ref())
+        .and_then(|conditions| {
+            conditions
+                .iter()
+                .find(|c| c.type_ == RESOURCE_SYNC_FAILING_CONDITION)
+        })
+        .filter(|c| c.status == new_status)
+        .map(|c| c.last_transition_time.clone())
+        .unwrap_or(now)
 }
 
 // TODO: Exponential Backoff using DefaultBackoff for watcher
@@ -402,36 +422,35 @@ mod tests {
     static NOW: Lazy<Time> = Lazy::new(|| Time(chrono::Utc::now()));
     static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
 
+    fn status_with_condition(status: &str) -> Option<ResourceSyncStatus> {
+        Some(ResourceSyncStatus {
+            conditions: Some(vec![Condition {
+                last_transition_time: EPOCH.clone(),
+                type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
+                message: "".to_string(),
+                reason: "".to_string(),
+                observed_generation: None,
+                status: status.to_string(),
+            }]),
+        })
+    }
+
     #[rstest]
-    #[case::none(None, &NOW)]
-    #[case::no_conditions(Some(ResourceSyncStatus::default()), &NOW)]
-    #[case::empty_conditions(Some(ResourceSyncStatus{conditions: Some(vec![])}), &NOW)]
-    #[case::condition_already_present(
-        Some(
-            ResourceSyncStatus{
-                conditions: Some(
-                    vec![
-                        Condition{
-                            last_transition_time: EPOCH.clone(),
-                            type_: RESOURCE_SYNC_FAILING_CONDITION.to_string(),
-                            message: "".to_string(),
-                            reason: "".to_string(),
-                            observed_generation: None,
-                            status: "".to_string()
-                        }
-                    ]
-                )
-            }
-        ),
-        &NOW
-    )]
+    #[case::none(None, "True", &NOW)]
+    #[case::no_conditions(Some(ResourceSyncStatus::default()), "True", &NOW)]
+    #[case::empty_conditions(Some(ResourceSyncStatus{conditions: Some(vec![])}), "True", &NOW)]
+    #[case::still_failing_keeps_time(status_with_condition("True"), "True", &EPOCH)]
+    #[case::still_succeeding_keeps_time(status_with_condition("False"), "False", &EPOCH)]
+    #[case::failure_after_success_transitions(status_with_condition("False"), "True", &NOW)]
+    #[case::success_after_failure_transitions(status_with_condition("True"), "False", &NOW)]
     #[tokio::test]
     async fn test_sync_failing_transition_time(
         #[case] status: Option<ResourceSyncStatus>,
+        #[case] new_status: &str,
         #[case] expected: &Time,
     ) {
-        let result = sync_failing_transition_time(&status);
-        let diff = result.0 - expected.0;
+        let result = sync_failing_transition_time(&status, new_status);
+        let diff = (result.0 - expected.0).abs();
 
         assert!(diff.le(&TimeDelta::minutes(1)))
     }
