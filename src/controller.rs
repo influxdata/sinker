@@ -235,27 +235,7 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     )
     .await;
 
-    let status = match &result {
-        Err(err) => Some(ResourceSyncStatus {
-            conditions: Some(vec![sync_failing_condition(
-                &resource_sync,
-                "True",
-                RESOURCE_SYNC_FAILING_CONDITION,
-                err.to_string(),
-            )]),
-        }),
-        // A successful reconcile must reset the condition to False rather than leave the last
-        // failure latched. Skip this for deleted resources; their finalizer may already be gone.
-        Ok(_) if !resource_sync.has_been_deleted() => Some(ResourceSyncStatus {
-            conditions: Some(vec![sync_failing_condition(
-                &resource_sync,
-                "False",
-                RESOURCE_SYNC_SUCCEEDED_REASON,
-                "Sync succeeded".to_string(),
-            )]),
-        }),
-        Ok(_) => resource_sync.status.clone(),
-    };
+    let status = reconcile_status(&resource_sync, &result);
 
     if status != resource_sync.status {
         parent_api
@@ -330,6 +310,33 @@ async fn source_and_target_apis(
         .await?;
 
     Ok((source_api, target_api))
+}
+
+fn reconcile_status(
+    resource_sync: &ResourceSync,
+    result: &Result<Action>,
+) -> Option<ResourceSyncStatus> {
+    match result {
+        Err(err) => Some(ResourceSyncStatus {
+            conditions: Some(vec![sync_failing_condition(
+                resource_sync,
+                "True",
+                RESOURCE_SYNC_FAILING_CONDITION,
+                err.to_string(),
+            )]),
+        }),
+        // A successful reconcile must reset the condition to False rather than leave the last
+        // failure latched. Skip this for deleted resources; their finalizer may already be gone.
+        Ok(_) if !resource_sync.has_been_deleted() => Some(ResourceSyncStatus {
+            conditions: Some(vec![sync_failing_condition(
+                resource_sync,
+                "False",
+                RESOURCE_SYNC_SUCCEEDED_REASON,
+                "Sync succeeded".to_string(),
+            )]),
+        }),
+        Ok(_) => resource_sync.status.clone(),
+    }
 }
 
 fn sync_failing_condition(
@@ -411,11 +418,17 @@ pub async fn run(client: Client) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION};
-    use crate::resources::ResourceSyncStatus;
+    use super::{
+        reconcile_status, sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION,
+        RESOURCE_SYNC_SUCCEEDED_REASON,
+    };
+    use crate::resources::{ResourceSync, ResourceSyncStatus};
+    use crate::{Error, Result};
     use chrono::{TimeDelta, TimeZone};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use kube::runtime::controller::Action;
     use once_cell::sync::Lazy;
     use rstest::rstest;
 
@@ -453,5 +466,55 @@ mod tests {
         let diff = (result.0 - expected.0).abs();
 
         assert!(diff.le(&TimeDelta::minutes(1)))
+    }
+
+    fn resource_sync(deleted: bool, status: Option<ResourceSyncStatus>) -> ResourceSync {
+        ResourceSync {
+            metadata: ObjectMeta {
+                deletion_timestamp: deleted.then(|| EPOCH.clone()),
+                ..Default::default()
+            },
+            spec: Default::default(),
+            status,
+        }
+    }
+
+    fn single_condition(status: Option<ResourceSyncStatus>) -> Condition {
+        let conditions = status.unwrap().conditions.unwrap();
+        assert_eq!(conditions.len(), 1);
+        conditions.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn test_reconcile_status_err_sets_failing_true() {
+        let rs = resource_sync(false, None);
+        let result: Result<Action> = Err(Error::NameRequired);
+
+        let condition = single_condition(reconcile_status(&rs, &result));
+
+        assert_eq!(condition.type_, RESOURCE_SYNC_FAILING_CONDITION);
+        assert_eq!(condition.status, "True");
+        assert_eq!(condition.reason, RESOURCE_SYNC_FAILING_CONDITION);
+        assert_eq!(condition.message, Error::NameRequired.to_string());
+    }
+
+    #[test]
+    fn test_reconcile_status_ok_resets_failing_to_false() {
+        let rs = resource_sync(false, status_with_condition("True"));
+        let result: Result<Action> = Ok(Action::await_change());
+
+        let condition = single_condition(reconcile_status(&rs, &result));
+
+        assert_eq!(condition.type_, RESOURCE_SYNC_FAILING_CONDITION);
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, RESOURCE_SYNC_SUCCEEDED_REASON);
+    }
+
+    #[test]
+    fn test_reconcile_status_ok_deleted_keeps_existing_status() {
+        let rs = resource_sync(true, status_with_condition("True"));
+        let result: Result<Action> = Ok(Action::await_change());
+
+        assert_eq!(reconcile_status(&rs, &result), rs.status);
     }
 }
