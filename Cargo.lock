@@ -1992,6 +1992,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "http",
  "k8s-openapi",
  "kube",
  "kubert",
@@ -2008,6 +2009,7 @@ dependencies = [
  "tokio",
  "tokio-context",
  "tokio-stream",
+ "tower",
  "tracing",
 ]
 

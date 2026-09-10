@@ -214,3 +214,313 @@ impl RemoteWatcher {
         Ok(resource_version)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{api_error, discovery_response, resource_sync, response, MockApi};
+    use http::Response;
+    use kube::client::Body;
+    use rstest::rstest;
+    use serde_json::{json, Value};
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
+
+    fn watcher(
+        client: Client,
+    ) -> (
+        RemoteWatcher,
+        mpsc::UnboundedReceiver<ObjectRef<ResourceSync>>,
+    ) {
+        let sync = resource_sync();
+        let key = RemoteWatcherKey {
+            object: sync.spec.source.clone(),
+            resource_sync: ObjectRef::from_obj(&sync),
+        };
+        let (sender, receiver) = mpsc::unbounded_channel();
+        (RemoteWatcher::new(key, sender, client), receiver)
+    }
+
+    fn watch_response(events: Vec<Value>) -> Response<Body> {
+        let mut bytes = Vec::new();
+        for event in events {
+            serde_json::to_writer(&mut bytes, &event).expect("serialize watch event");
+            bytes.push(b'\n');
+        }
+        Response::builder()
+            .status(200)
+            .body(Body::from(bytes))
+            .expect("watch response")
+    }
+
+    fn object_event(event: &str, manager: Option<&str>, rv: Option<&str>) -> Value {
+        let managed_fields = manager
+            .map(|manager| vec![json!({"manager": manager, "time": "2024-01-01T00:00:00Z"})]);
+        json!({"type": event, "object": {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "source-config", "resourceVersion": rv, "managedFields": managed_fields}}})
+    }
+
+    #[rstest]
+    #[case::added_external(object_event("ADDED", Some("external"), Some("11")), "11", true)]
+    #[case::added_sinker(
+        object_event("ADDED", Some("sinker.influxdata.io"), Some("11")),
+        "11",
+        false
+    )]
+    #[case::modified_external(object_event("MODIFIED", Some("external"), Some("12")), "12", true)]
+    #[case::modified_sinker(
+        object_event("MODIFIED", Some("sinker.influxdata.io"), Some("12")),
+        "12",
+        false
+    )]
+    #[case::unknown_ownership(object_event("MODIFIED", None, Some("13")), "13", true)]
+    #[case::deleted_sinker(
+        object_event("DELETED", Some("sinker.influxdata.io"), Some("14")),
+        "14",
+        true
+    )]
+    #[case::bookmark(json!({"type": "BOOKMARK", "object": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"resourceVersion": "15"}}}), "15", false)]
+    #[case::expired_version(json!({"type": "ERROR", "object": {"code": 410, "reason": "Expired", "message": "too old", "status": "Failure"}}), "0", false)]
+    #[case::api_error(json!({"type": "ERROR", "object": {"code": 500, "reason": "InternalError", "message": "retry", "status": "Failure"}}), "10", true)]
+    #[tokio::test]
+    async fn watch_events_advance_versions_and_reconcile_when_needed(
+        #[case] event: Value,
+        #[case] expected_rv: &str,
+        #[case] reconcile: bool,
+    ) {
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            watch_response(vec![event]),
+        ]);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        let api = watcher
+            .key
+            .object
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("API discovery");
+        let rv = timeout(
+            Duration::from_secs(3),
+            watcher.listen(
+                &api,
+                "10".into(),
+                &WatchParams::default(),
+                &mut DefaultBackoff::default(),
+            ),
+        )
+        .await
+        .expect("bounded watch stream")
+        .expect("read events");
+        assert_eq!(rv, expected_rv);
+        if reconcile {
+            assert_eq!(
+                receiver.try_recv().expect("reconcile event"),
+                watcher.key.resource_sync
+            );
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps"),
+        ]);
+    }
+
+    #[rstest]
+    #[case::added("ADDED")]
+    #[case::modified("MODIFIED")]
+    #[case::deleted("DELETED")]
+    #[tokio::test]
+    async fn object_events_require_resource_version(#[case] event: &str) {
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            watch_response(vec![object_event(event, None, None)]),
+        ]);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        let api = watcher
+            .key
+            .object
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("API discovery");
+        let error = watcher
+            .listen(
+                &api,
+                "10".into(),
+                &WatchParams::default(),
+                &mut DefaultBackoff::default(),
+            )
+            .await
+            .expect_err("missing event version");
+        assert!(matches!(error, Error::ResourceVersionRequired));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps"),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn start_reconciles_then_reconnects_from_last_event_with_name_selector() {
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            response(
+                200,
+                json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "source-config", "resourceVersion": "10"}}),
+            ),
+            watch_response(vec![object_event("MODIFIED", Some("external"), Some("11"))]),
+            api_error(403),
+        ]);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        let error = timeout(
+            Duration::from_secs(2),
+            watcher.start(&mut DefaultBackoff::default()),
+        )
+        .await
+        .expect("bounded reconnect")
+        .expect_err("second watch denied");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 403));
+        for _ in 0..2 {
+            assert_eq!(
+                receiver
+                    .try_recv()
+                    .expect("initial and external reconciles"),
+                watcher.key.resource_sync
+            );
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps/source-config"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps"),
+        ]);
+        for (request, rv) in [
+            (&requests[2], "resourceVersion=10"),
+            (&requests[3], "resourceVersion=11"),
+        ] {
+            let parameters: Vec<_> = request
+                .uri()
+                .query()
+                .expect("watch query")
+                .split('&')
+                .collect();
+            assert!(parameters.contains(&"watch=true"));
+            assert!(parameters.contains(&"fieldSelector=metadata.name%3Dsource-config"));
+            assert!(parameters.contains(&rv));
+        }
+    }
+
+    #[tokio::test]
+    async fn start_requires_namespace_before_api_access() {
+        let mock = MockApi::new(vec![]);
+        let (mut watcher, _receiver) = watcher(mock.client.clone());
+        watcher.key.resource_sync.namespace = None;
+        assert!(matches!(
+            watcher
+                .start(&mut DefaultBackoff::default())
+                .await
+                .expect_err("namespace required"),
+            Error::NamespaceRequired
+        ));
+        mock.finish(&[]);
+    }
+
+    #[tokio::test]
+    async fn start_requires_initial_resource_version_before_sending_reconcile() {
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!({"metadata": {"name": "source-config"}})),
+        ]);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        assert!(matches!(
+            watcher
+                .start(&mut DefaultBackoff::default())
+                .await
+                .expect_err("resource version required"),
+            Error::ResourceVersionRequired
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps/source-config"),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn failed_start_requests_reconciliation_and_can_be_cancelled() {
+        let mock = MockApi::new(vec![]);
+        let (mut watcher, mut receiver) = watcher(mock.client.clone());
+        watcher.key.resource_sync.namespace = None;
+        let expected = watcher.key.resource_sync.clone();
+        let (ctx, handle) = Context::new();
+        let task = tokio::spawn(watcher.run(ctx));
+        let event = timeout(Duration::from_secs(2), receiver.recv()).await;
+        handle.cancel();
+        timeout(Duration::from_secs(3), task)
+            .await
+            .expect("join cancelled watch")
+            .expect("watch task did not panic");
+        assert_eq!(event.expect("failure triggers reconcile"), Some(expected));
+        mock.finish(&[]);
+    }
+
+    #[tokio::test]
+    async fn sending_to_closed_reconcile_channel_is_nonfatal() {
+        let mock = MockApi::new(vec![]);
+        let (watcher, receiver) = watcher(mock.client.clone());
+        drop(receiver);
+        watcher.send_reconcile_on_success(&mut DefaultBackoff::default());
+        mock.finish(&[]);
+    }
+
+    #[tokio::test]
+    async fn invalid_watch_json_returns_a_decode_error() {
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            Response::builder()
+                .status(200)
+                .body(Body::from(b"not-json\n".to_vec()))
+                .expect("malformed stream"),
+        ]);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        let api = watcher
+            .key
+            .object
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("API discovery");
+        let error = watcher
+            .listen(
+                &api,
+                "10".into(),
+                &WatchParams::default(),
+                &mut DefaultBackoff::default(),
+            )
+            .await
+            .expect_err("decode failure");
+        assert!(matches!(
+            error,
+            Error::KubeError(kube::Error::SerdeError(_))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps"),
+        ]);
+    }
+}
