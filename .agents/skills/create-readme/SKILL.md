@@ -1,20 +1,31 @@
 ---
 name: create-readme
-description: Create or update repository, module, package, or directory READMEs grounded in code, tests, and configuration. Use when the user asks to write README documentation for users and maintainers, including architecture and control-flow explanations with Mermaid diagrams where useful.
+description: Create or update repository, module, package, or directory READMEs and agent-facing documentation such as skills and AGENTS.md files. Ground guidance in sources, keep primary documents concise, and link to task-specific details.
 ---
 
 > **After completing tasks with this skill:** Invoke `improving-skills` to capture feedback and lessons learned.
 
 # Create README
 
-Write README documentation based on the actual implementation, tests, configuration, and existing docs. Explain how to
-use and maintain the target, with detail proportional to its complexity and the user's requested scope.
+Write documentation based on the actual implementation, tests, configuration, and existing docs. Tailor it to the
+intended audience, with detail proportional to the target's complexity and the user's requested scope.
+
+## Agent-Facing Documentation and Context
+
+For all documentation, including general `README.md` files, keep primary documents concise: summarize essentials,
+link to existing sources, and separate substantial task-specific detail into references that readers can load when needed.
+Preserve the information needed by the intended audience and the constraints needed to act correctly.
+
+When authoring or improving skills or `AGENTS.md` files, read
+[agent-facing documentation guidance](references/agent-facing-documentation.md) for audience selection, reference
+structure, avoiding duplication, and self-improvement hooks. For README restructuring, use its guidance on summaries
+and references while preserving human-facing usage information.
 
 ## Workflow
 
-1. Identify the requested target, output path, and applicable `AGENTS.md` instructions. If the target is ambiguous,
+1. Identify the requested target, audience, output path, and applicable `AGENTS.md` instructions. If the target is ambiguous,
    inspect likely paths before asking for clarification. Resolve module names to actual files; a Rust module may be a
-   single `.rs` file rather than a directory. Use the containing directory's README or existing documentation coverage
+   single `.rs` file rather than a directory. For README tasks, use the containing directory's README or existing coverage
    unless the user specifies another location.
 2. Establish any requested change scope before choosing edits:
     - Between refs: inspect `git diff --name-status <base>...<head>` and the relevant hunks for branch changes since the
@@ -22,14 +33,16 @@ use and maintain the target, with detail proportional to its complexity and the 
     - Explicit commits: inspect each with `git show --name-status --patch <commit>`.
     - Since the README was last updated: find its last commit with `git log -1 --format=%H -- <README>`, then inspect
       `git diff <commit>..HEAD -- <target>`. If it has no history, inspect the current implementation directly.
-3. Read the implementation thoroughly enough to explain responsibilities, public interfaces, data flow, side effects,
-   and maintenance concerns. Follow callers, related modules, tests, examples, and build or deployment files where they
-   clarify behavior. For historical documentation, validate against the requested revision; otherwise use current code.
+3. Read the sources needed to substantiate the requested documentation. For implementation docs, trace responsibilities,
+   public interfaces, data flow, side effects, and maintenance concerns through relevant code, tests, and configuration.
+   For agent instructions, verify workflows, commands, and constraints against applicable instructions and available tools.
+   Follow references when relevant to the task. For historical docs, validate against the requested revision.
 4. For scoped updates, extract changed identifiers, configuration fields, and behaviors from the diff. Search the
-   complete target README and relevant ancestor or linked documentation for affected usage examples, lifecycle
+   complete target document and relevant ancestor or linked documentation for affected usage examples, lifecycle
    descriptions, and summaries. Include related files outside the target when needed to verify behavior, but keep
    documentation edits tied to the requested scope.
-5. Draft or update the README, preserving accurate existing content and the user's chosen structure.
+5. Draft or update the document, preserving accurate existing content and the user's chosen structure. Summarize and
+   link to existing coverage before creating new references; keep each detailed topic in one maintained location.
 6. Verify claims, examples, commands, and links against their sources. Report validation performed and any unresolved
    discrepancies.
 
@@ -52,41 +65,8 @@ use and maintain the target, with detail proportional to its complexity and the 
   not turn a build-time API feature selection or pinned toolchain into a claim about minimum supported runtime versions
   without supporting evidence.
 
-### Sinker Source Pointers
-
-Sinker is a single Rust package with a controller binary and library modules. Use these pointers only when relevant to
-the requested documentation; they are starting points for investigation, not a required README outline. Paths are
-relative to the repository root.
-
-- `src/main.rs` and `src/lib.rs`: CLI entrypoint, runtime setup, module visibility, and shared errors. Client and admin
-  arguments are flattened from `kubert`, so their full interface is not declared locally.
-- `src/resources.rs` and `manifests/crd.yml`: `ResourceSync` and `SinkerContainer` schemas, serialized field names,
-  defaults, and validation. `SinkerContainer` has a manually supplied schema; inspect that as well as the Rust types.
-  Check examples in `example.yaml` against these sources and runtime handling.
-- `src/controller.rs`, `src/remote_watcher.rs`, `src/remote_watcher_manager.rs`, and `src/filters.rs`: reconciliation
-  triggers, target application, status, deletion, watcher lifecycle, and filtering of self-generated events. Follow both
-  reconciliation and watch paths before describing retries, drift correction, or cleanup guarantees.
-- `src/resource_extensions.rs`: client selection, resource discovery, namespace resolution, and access checks for
-  kubeconfig Secrets. Distinguish the namespace holding credentials from the source or target resource namespace, and
-  check local, remote, and cluster-scoped cases when documenting references.
-- `src/mapping.rs` and its tests: whole-resource copying, field selection, target construction, and metadata handling.
-  Source selectors and destination paths use different parsing logic; verify their syntax and missing-value behavior
-  separately.
-- `manifests/`, `Dockerfile`, and `.github/workflows/rust.yml`: deployment, RBAC, container packaging, and build or
-  publication commands. Derive operational examples from these files and identify placeholders or environment-specific
-  values.
-
-### Development and Generation Commands
-
-Use commands appropriate to the documented target and verify them against the current CI workflow. This repository uses
-`cargo build`, `cargo fmt`, `cargo test`, and `cargo clippy --all-targets --all-features`. Tests are inline in the Rust
-modules. Cargo test filters match test names, not filesystem paths; if documenting a narrower command, check the
-selected tests with `cargo test <filter> -- --list`.
-
-The `manifests` subcommand in `src/main.rs` emits CRDs. CI runs `cargo run -- manifests > manifests/crd.yml` and checks
-for drift. When verifying documentation, direct generated output to a temporary file for comparison so checked-in schema
-changes are preserved. Keep CRD generation distinct from rendering the complete deployment through
-`manifests/kustomization.yaml`.
+For Sinker implementation, development commands, or CRD generation, read the relevant parts of the
+[Sinker source guide](references/sinker-source-guide.md).
 
 ## README Content
 
@@ -114,7 +94,8 @@ is central to understanding behavior.
 - Be detailed but concise. Separate usage from implementation details when that helps the reader.
 - Name real files, types, commands, resources, and configuration fields. Use serialized names in configuration examples
   and Rust identifiers when discussing code.
-- Link to source files and related documentation using paths relative to the README's location.
+- Link to source files and related documentation using paths relative to the document's location. Explain when each
+  reference is useful so agents can select relevant context without reading every linked document.
 - Treat existing docs and example fixtures as evidence to check, not proof that a behavior or deployment is supported.
   Mark consequential unknowns explicitly.
 - Reread prose, tables, examples, and diagrams together against the implementation so a scoped update leaves no
