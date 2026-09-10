@@ -1,4 +1,4 @@
 interface:
   display_name: "Create README"
-  short_description: "Write detailed module README files"
-  default_prompt: "Use $create-readme to document this module with a clear README."
+  short_description: "Write READMEs and agent-facing docs"
+  default_prompt: "Use $create-readme to write or update this documentation with concise summaries and links to relevant details."
