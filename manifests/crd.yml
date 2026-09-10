@@ -139,9 +139,6 @@ spec:
             - source
             - target
             type: object
-            x-kubernetes-validations:
-              - message: spec is immutable
-                rule: "self == oldSelf"
           status:
             nullable: true
             properties:
