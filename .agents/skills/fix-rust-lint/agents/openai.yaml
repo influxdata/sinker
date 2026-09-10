@@ -1,4 +1,4 @@
 interface:
   display_name: "Fix Rust Lint"
-  short_description: "Fix module-scoped Rust clippy issues"
-  default_prompt: "Use $fix-rust-lint to fix clippy issues in this Rust crate or workspace."
+  short_description: "Fix Sinker Rust lint and formatting issues"
+  default_prompt: "Use $fix-rust-lint to fix Sinker Clippy and rustfmt findings while preserving behavior and running the required locked Cargo checks."
