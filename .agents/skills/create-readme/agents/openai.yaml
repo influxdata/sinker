@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create README"
+  short_description: "Write detailed module README files"
+  default_prompt: "Use $create-readme to document this module with a clear README."
