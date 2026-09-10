@@ -215,8 +215,6 @@ async fn reconcile_normally(
     Ok(Action::await_change())
 }
 
-// TODO: Until CDC finalizer is implemented (and even after that if a CDC is deleted using foreground propagation) CDC deletion could cause the cluster to be deleted or unreachable before we have a chance to clean up the resource(s) owned by the ResourceSync, we should be able to detect and handle this scenario gracefully
-// TODO: Immutability on source/target (via CEL?)
 // TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
 
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
