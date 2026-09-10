@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fix Rust Lint"
+  short_description: "Fix module-scoped Rust clippy issues"
+  default_prompt: "Use $fix-rust-lint to fix clippy issues in this Rust crate or workspace."
