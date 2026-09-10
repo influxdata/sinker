@@ -1,105 +1,67 @@
 ---
 name: improving-skills
-description: Use when finishing a task that used a project skill from .agents/skills/, or when a skill was unclear, missing information, or could be improved. Triggers feedback collection for continuous skill improvement.
+description: Collect feedback after using a project skill from .agents/skills/, when a used skill is unclear, incomplete, or incorrect, or when the user requests a skill review. Propose or apply scoped improvements grounded in the task just completed.
 ---
+
+> **After completing tasks with this skill:** Invoke `improving-skills` to capture feedback and lessons learned.
+> For this skill, include one self-review in the current feedback pass; do not recursively invoke it.
 
 # Improving Skills
 
-## Overview
-
-After using any skill from this project's `.agents/skills/` directory, collect feedback and propose improvements. Skills improve through use — gaps found today become fixes tomorrow.
+Use lessons from completed work to improve skill instructions and supporting resources. Keep feedback concrete and
+proportional to the task, preserving guidance that worked well.
 
 ## When This Applies
 
-**Trigger after using ANY skill in `.agents/skills/`** (this repo's skills, not superpowers).
+- After completing a task that used a skill from the current project's `.agents/skills/` directory.
+- When a skill used during the task was unclear, incomplete, or incorrect.
+- When the user explicitly requests feedback on a skill, including one stored outside the repository.
 
-How to know: If you invoked a skill for this starfleet repo and completed the task, invoke this skill next.
-
-## Feedback Collection
-
-After completing the task that used the skill, ask yourself:
-
-| Question | Why It Matters |
-|----------|----------------|
-| What was missing? | Gaps cause future agents to repeat workarounds |
-| What was unclear? | Confusing sections slow everyone down |
-| What was most useful? | Confirms what to keep/expand |
-| What was wrong? | Errors propagate if not fixed |
+Resolve skills to their actual locations and read applicable `AGENTS.md` instructions. Follow references relevant to the
+observed issue. Do not assume that skills from another repository or skill framework are installed here.
 
 ## Workflow
 
-```dot
-digraph feedback {
-    "Task using skill completed" -> "Urgent follow-up task?";
-    "Urgent follow-up task?" -> "Do urgent task FIRST" [label="yes"];
-    "Urgent follow-up task?" -> "Any issues or feedback?" [label="no"];
-    "Do urgent task FIRST" -> "Any issues or feedback?";
-    "Any issues or feedback?" -> "Draft improvement" [label="yes"];
-    "Any issues or feedback?" -> "Done" [label="no, skill was perfect"];
-    "Draft improvement" -> "Show user proposed changes";
-    "Show user proposed changes" -> "User approves?";
-    "User approves?" -> "Edit skill file" [label="yes"];
-    "User approves?" -> "Done" [label="no"];
-    "Edit skill file" -> "Done";
-}
-```
+1. Finish the user's task and any urgent follow-up first. Capture feedback while the evidence is fresh and include it
+   in the task's final response.
+2. Review the skills used and the decisions or workarounds they caused. Identify missing guidance, unclear instructions,
+   incorrect assumptions, and useful guidance to retain. Ground findings in the completed work and verify proposed paths,
+   commands, and behavior against the destination repository or available tools.
+3. Check whether the reviewed skills include the feedback hook below. Recommend it for every project skill, including
+   this one. Keep edits within the authorized scope; a missing hook elsewhere is a recommendation, not a reason to edit
+   every skill in the repository.
+4. Apply improvements already covered by the user's request or earlier authorization without asking again. Otherwise,
+   prepare a concrete proposal before requesting approval for substantive edits outside that scope. Feedback collection
+   alone does not authorize changes to unrelated skills or externally managed bundles.
+5. Update affected supporting resources together with `SKILL.md`, preserving unrelated edits and invocation policy.
+   Check frontmatter, references, and consistency across the changed bundle. Run focused checks for changed executable
+   helpers; distinguish checks actually run from behavior verified by inspection.
+6. Report meaningful changes, remaining proposals, and validation briefly. If no change is warranted, mention what worked
+   well without inventing an improvement. Include one review of `improving-skills` itself in this pass. That review
+   satisfies its own feedback hook; finish without starting another feedback cycle solely because this skill ran.
 
-**Key point:** If there's an urgent follow-up task, handle it first — but you MUST still provide skill feedback before the session ends. "Later" in an ephemeral session means "never."
+## Feedback Hook for Project Skills
 
-## Proposing Changes
-
-**Always propose before editing.** Format:
+Recommend that all project skills, including `improving-skills` itself, include this instruction after the frontmatter
+or in an equivalent completion section:
 
 ```markdown
-## Skill Improvement Proposal
-
-**Skill:** [skill-name]
-**Issue:** [gap/unclear/wrong/enhancement]
-
-**Current content:**
-[quote relevant section or "missing"]
-
-**Proposed change:**
-[new or revised content]
-
-**Rationale:**
-[why this helps future agents]
+> **After completing tasks with this skill:** Invoke `improving-skills` to capture feedback and lessons learned.
 ```
 
-After user approves, edit the skill file directly.
+Preserve equivalent existing instructions rather than duplicating them. When creating, migrating, or updating a project
+skill within the user's requested scope, add the hook if missing. For `improving-skills`, keep the single-pass self-review
+qualification shown above so the hook terminates.
 
-This takes 30 seconds, not 30 minutes. A quick proposal with a one-sentence rationale is enough — don't over-formalize it.
+## Useful Feedback
 
-## Red Flags - You're Skipping Feedback
+For each material finding, give the skill name and file, the observed issue or successful guidance, the proposed or applied
+change, and a brief rationale. Quote existing text only when needed to make the change understandable. A short paragraph
+or small diff is usually enough; combine related findings.
 
-| Thought | Reality |
-|---------|---------|
-| "The skill worked, nothing to report" | Positive confirmation helps too — what worked well? |
-| "Reporting feels like extra work" | 30 seconds of feedback saves hours of repeated workarounds |
-| "User didn't ask for feedback" | This skill IS asking for feedback — you have permission |
-| "It's not my job to improve docs" | Every agent using skills should improve them |
-| "I'll come back to this later" | You won't. Sessions are ephemeral. Later = never. Write it now. |
-| "I'll invoke this skill later" | Invoke NOW while context is fresh. Later = never. |
-| "This is too minor to report" | Minor issues compound. Report it. |
-| "That skill isn't my domain" | You used it. You found gaps. You're the best person to report them right now. |
-| "The skill owner should fix it" | There is no single owner. Every user is a maintainer. |
-| "I need to prioritize the user's next request" | Handle urgent work first, then provide feedback. Both matter. |
-| "Feedback would create context-switching friction" | A 30-second proposal isn't a context switch — it's a note. |
-
-## What NOT to Report
-
-- Typos (fix silently if obvious)
-- Style preferences (skills have varied styles, that's fine)
-- Hypothetical improvements ("someday we might need...")
-- Changes to superpowers skills (those have their own process)
-
-## Example Improvements
-
-**Gap found:**
-> Backlog skill didn't cover how to handle issues that span both starfleet and tubernetes repos. Added cross-repo issue linking guidance.
-
-**Unclear section:**
-> The `gh project item-edit` section didn't clarify which fields can be set via CLI vs require the GitHub UI. Added a table.
-
-**Worked well:**
-> The agent team structure in prioritizing-backlog saved significant time on data gathering. Consider similar patterns for other data-heavy skills.
+- Report concrete gaps, contradictory instructions, stale dependencies, and verified path or command errors.
+- Keep guidance that helped the task, especially constraints tied to an observed failure mode.
+- Fix obvious typos within an authorized edit without a separate proposal.
+- Skip stylistic preferences and hypothetical future needs. Do not turn one task's details into universal requirements.
+- For skills maintained outside the project, respect their ownership and update process. Propose changes unless the
+  user's request or existing authorization covers editing that bundle.
