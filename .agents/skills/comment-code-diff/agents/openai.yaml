@@ -1,0 +1,4 @@
+interface:
+  display_name: "Comment Code Diff"
+  short_description: "Document scoped Go, YAML, and rollout notes"
+  default_prompt: "Use $comment-code-diff to add concise, useful comments and applicable RollingUpdate operator notes to this branch, package, file, or manifest scope."
