@@ -35,6 +35,16 @@ For API/schema changes, also perform the CRD comparison described below. For dep
 execute examples only when needed to substantiate them. Report checks actually run and distinguish existing failures
 from regressions introduced by the change.
 
+## Code style
+
+Keep project code as DRY (Don't Repeat Yourself) as reasonably possible. Reuse existing helpers and consolidate repeated
+logic when doing so improves clarity and maintainability. Avoid abstractions that obscure meaningful differences or add
+unnecessary complexity, and keep refactoring focused on the requested task.
+
+Preserve existing behaviors and contracts when changing code, including during refactoring and deduplication. Change
+them only when the user explicitly requests it or there is no other reasonable way to complete the requested task. In
+the latter case, keep the change minimal and explain why it is necessary and which behaviors or contracts it affects.
+
 ## Implementation constraints
 
 - **API and serialization:** Update [resources.rs](src/resources.rs), [manifests/crd.yml](manifests/crd.yml), and affected
