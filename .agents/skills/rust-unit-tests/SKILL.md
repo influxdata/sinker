@@ -1,143 +1,109 @@
 ---
 name: rust-unit-tests
-description: write comprehensive rust unit tests for a user-specified file, module, function, or code path. use when the user asks to add, improve, review, or generate rust tests, especially for table-driven testing with rstest, branch coverage, tokio async tests, randomized fixtures, temporary filesystem behavior, precise assertions, and explicit verification of success and error results.
+description: Write comprehensive Rust unit tests for a user-specified file, module, function, or code path. Use when the user asks to add, improve, review, or generate Rust tests, including table-driven testing with rstest, branch coverage, Tokio async tests, randomized fixtures, temporary filesystem behavior, and precise success and error assertions.
 ---
+
+> **After completing tasks with this skill:** Invoke [improving-skills](../improving-skills/SKILL.md) to capture feedback
+> and lessons learned. Combine this with the repository's required feedback pass.
 
 # Rust Unit Tests
 
-Write comprehensive Rust tests for the file, module, function, or code path specified by the user.
+Write focused tests that comprehensively exercise the requested behavior. Preserve existing regression coverage and
+keep changes within the requested code path.
 
-## Core workflow
+## Workflow
 
-1. Inspect the target code before writing tests.
-2. Identify all public behavior, logical branches, edge cases, parameter combinations, and error paths.
-3. Prefer table-driven tests using `rstest` wherever practical.
-4. Aim for 100% code coverage as much as reasonably possible.
-5. Keep tests readable, focused, deterministic, and DRY.
-6. Do not ignore `Result` values, error branches, or cleanup failures.
+1. Read the repository's [AGENTS.md](../../../AGENTS.md) and use the [README source map](../../../README.md#development)
+   to locate the target. Inspect its implementation, callers, existing tests, and relevant documented invariants before
+   choosing cases. File links in this skill are relative to this file.
+2. Map reachable branches, boundary values, relevant parameter combinations, and success and error outcomes. Include
+   absent, empty, default, and non-default inputs where they produce distinct behavior. Aim for complete coverage of the
+   requested code path; explain gaps that require an external system or cannot reasonably be exercised.
+3. Add or extend an inline `#[cfg(test)]` module beside the implementation, following Sinker's existing layout. Reuse setup
+   helpers where useful, but keep each case's inputs and expected behavior visible. Avoid widening production visibility
+   solely to test private helpers.
+4. Run the focused tests, then the required repository checks described under [Verification](#verification). Report
+   assumptions, remaining gaps, and checks actually run; do not claim a coverage percentage without measurement.
 
-## Test style
+## Dependencies and test style
 
-Use `rstest` for table-based tests whenever reasonable.
+Use [Cargo.toml](../../../Cargo.toml), [Cargo.lock](../../../Cargo.lock), and
+[rust-toolchain.toml](../../../rust-toolchain.toml) for available dependencies, resolved APIs, and the toolchain.
+Sinker already has `rstest`, `rand`, `once_cell`, and `chrono` as dev-dependencies, and Tokio as a runtime dependency.
+Prefer standard assertions and existing helpers. Add a dev-dependency or feature only when the requested tests need it;
+the project does not currently include an assertion library or temporary-directory helper.
 
-Prefer named and parameterized cases, for example:
+- Prefer `#[rstest]` with named `#[case::scenario(...)]` cases for comparable inputs and outcomes. Use `#[test]` for
+  synchronous tests that do not benefit from a table, and `#[tokio::test]` when the test needs an async runtime.
+- Use helpers, builders, or `#[fixture]` for shared setup when they make the cases clearer. Share immutable fixture data
+  or construct fresh state per case; avoid abstractions that obscure the behavior being asserted.
+- Test observable behavior and meaningful invariants, including preservation of unrelated data when relevant. Derive
+  expected values independently of the implementation so tests can detect regressions.
+- Use `#[should_panic(expected = "...")]` only for intentional panic contracts. Report accidental panics encountered
+  while designing cases instead of treating them as required behavior.
 
-```rust
-#[rstest]
-#[case::empty_input("", Expected::Empty)]
-#[case::valid_input("abc", Expected::Parsed)]
-#[case::invalid_input("!", Expected::Error)]
-fn parses_input(#[case] input: &str, #[case] expected: Expected) {
-    // ...
-}
-```
+## Assertions and errors
 
-Use `#[should_panic]` only when the behavior being tested is intentionally panic-based and cannot be more precisely verified with `Result` assertions.
+Assert concrete return values, resulting state, or error variants and payloads. For JSON and Kubernetes objects, compare
+the relevant structure rather than serialized key order or a broad string match.
 
-When table-driven tests need shared randomized fixtures, define those fixtures before constructing the test case table using the `#[fixture]` attribute.
+Handle every `Result` from the test and its setup: use `expect`, `?` in a test returning `Result`, or explicit matching.
+Cover relevant success and failure branches of the code under test; setup helpers do not each need their own error
+matrix. Some functions return `Result` without a reachable error branch, so do not invent one solely to satisfy coverage.
 
-## Assertions
+For expected errors, prefer `expect_err` and a match on [Sinker's error variants](../../../src/lib.rs) or the relevant
+module's error type, checking meaningful payloads. A cause-specific variant can be sufficient. Check a stable message
+substring when text carries additional meaning or the error is opaque; avoid coupling to full dependency error wording.
+An `is_err()` assertion alone is insufficient when a more precise check is possible. For `Result<()>`, successful
+completion may be the whole return contract; also check side effects where applicable.
 
-Use standard Rust assertions when they are clear and sufficient.
+## Fixtures and isolation
 
-You may also use `https://github.com/google/assertor` when it improves readability or precision.
+Use explicit, distinct, non-empty and non-default values for fields relevant to the scenario; retain defaults for
+irrelevant scaffolding. Include separate cases for defaults, empty values, and `None` when they affect behavior.
 
-Keep assertions:
+Use randomized fixtures when variation strengthens the test. Seed a local RNG with `StdRng::seed_from_u64`, use the
+resolved `rand` API, and generate values that satisfy the intended domain. For example, alphanumeric sampling can
+produce digits, so it is unsuitable without filtering for a namespace suffix meant to match `[a-z]`. Report the input
+and seed on failure. Fixed seeds make failures reproducible; they do not make invalid fixture generation correct.
 
-- precise
-- focused
-- readable
-- tied directly to the expected behavior of the scenario
+Use fixed timestamps for ordering or retained-time assertions. When the code reads the current time internally, bound
+the expected time around the call instead of relying on sleeps or an exact independently sampled timestamp.
 
-Avoid broad assertions that only prove the function “does something.”
+For filesystem behavior, create files and directories under a unique system-temporary directory per case. Arrange
+cleanup even when assertions fail, handle explicit cleanup results, and assert cleanup failures when they are part of
+the behavior under test. Prefer a temporary-directory guard when available. Use repository files only when the target
+requires them, and keep test output out of the checkout.
 
-## Error handling requirements
+## Async behavior and Kubernetes boundaries
 
-If any function used in a test returns a `Result`, explicitly verify both success and error outcomes for relevant branches.
+The Rust test harness already runs tests in parallel; an async annotation is not needed for test-level concurrency.
+Isolate global state, environment variables, filesystem paths, and ports for both sync and async tests. Changing a test
+to `#[test]` does not serialize it. When isolation is impossible, use explicit coordination or a serial test invocation.
 
-Do not ignore errors.
+For async behavior, test success, failure, cancellation, and ordering where applicable. Coordinate with channels or
+barriers rather than sleeps, bound waits, and await spawned tasks while checking both join errors and returned results.
+Cancel or otherwise stop background tasks during cleanup. Tokio's configured `full` feature does not include
+`test-util`; check feature availability before using paused-time utilities.
 
-For expected errors:
+Sinker's existing tests exercise local logic. For API-dependent code, inspect the boundary and use a controlled client
+or a narrowly scoped test seam when needed. Tests must not rely on ambient kubeconfig or a live cluster. Keep assertions
+about local decisions distinct from claims about API-server authorization, validation, server-side apply, or garbage
+collection. Read the relevant [implementation constraints](../../../AGENTS.md#implementation-constraints) when testing
+mapping, status, access checks, or watch cleanup. If the requested behavior requires live verification, report that gap
+and follow the repository's live-testing instructions only when that work is in scope.
 
-1. Assert the error type when the type is meaningful.
-2. Assert the error value or error contents when the value is meaningful.
-3. Use `expect_err`, pattern matching, `err.to_string().contains("...")`, or an equivalent assertion helper to verify that the error message includes a substring indicating the cause of the error.
+## Verification
 
-Do not merely assert that an error exists unless no stronger assertion is possible.
+Run commands from the repository root. Cargo filters match module or test names, not file paths: replace `<filter>` in
+`cargo test --locked <filter> -- --list` with a name found in the target's tests and confirm the intended cases are
+selected before running `cargo test --locked <filter>`. A successful command that selects zero tests does not verify
+the change.
 
-## Fixtures and randomized values
+For Rust changes, complete all checks in [AGENTS.md's development instructions](../../../AGENTS.md#development-and-verification),
+including the full locked test suite. Use its additional checks if the task also changes schemas or deployment files.
+For skill-only edits, validate frontmatter, relative links, and claims against the sources; execute examples only when
+needed to substantiate them.
 
-For fixtures, use randomized non-`None`, non-empty, and non-default values as much as reasonably possible.
-
-Randomized values must still produce deterministic and reliable tests. Prefer seeded randomness or helper functions that generate valid randomized values without introducing flakiness.
-
-Use meaningful defaults only when the specific default value is part of the behavior under test.
-
-## Async tests
-
-Use `#[tokio::test]` as much as reasonably possible so tests can run concurrently.
-
-Do not use concurrent async tests when concurrency would cause issues, such as:
-
-- shared mutable global state
-- shared filesystem paths
-- process-wide environment variables
-- timing-sensitive behavior
-- external services or ports
-- tests that intentionally mutate common resources
-
-In those cases, isolate the state, use serial execution, or use a regular test where appropriate.
-
-## Filesystem tests
-
-If a test creates files or directories:
-
-1. Create them only inside the system temporary directory.
-2. Use unique paths for each test case.
-3. Attempt cleanup when the test finishes.
-4. Verify cleanup errors when cleanup is part of the behavior being tested.
-5. Avoid relying on repository-relative paths unless the target code explicitly requires them.
-
-Prefer temporary directory helpers where available.
-
-## Coverage expectations
-
-Ensure tests cover all logical branches as much as reasonably possible, including:
-
-- valid inputs
-- invalid inputs
-- empty inputs
-- boundary values
-- default values
-- non-default values
-- optional values present and absent
-- all relevant combinations of input parameters
-- branching paths
-- internal conditions that affect observable behavior
-- success results
-- expected error results
-- panic behavior, only when intentional
-- filesystem success and failure paths when applicable
-- async success, failure, cancellation, or ordering behavior when applicable
-
-Explicitly test all logical combinations of input parameters, branching paths, internal conditions, and expected outputs as much as reasonably possible.
-
-## DRYness
-
-Be DRY as much as reasonably possible.
-
-Prefer helpers, fixtures, builders, and table-driven cases over repeated setup code.
-
-Do not over-abstract tests if doing so makes the behavior harder to understand.
-
-## Output expectations
-
-When writing tests:
-
-1. Add or update the appropriate test module or test file.
-2. Include any required imports, dev-dependencies, or feature flags.
-3. Explain any assumptions made about the code under test.
-4. Call out branches that could not reasonably be tested and why.
-5. Ensure the resulting tests are idiomatic Rust and should compile in the project context.
-
-When modifying dependency files, add only the dependencies needed for the tests.
+Summarize the behavior covered, verification results, and any untested paths or existing failures. Distinguish local
+unit-test results from live behavior and commands inspected from commands executed.
