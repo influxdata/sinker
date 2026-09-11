@@ -1,0 +1,15 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    app.kubernetes.io/name: sinker
+  name: sinker
+  namespace: sinker
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sinker
+  podMetricsEndpoints:
+    - port: admin
+      path: /metrics

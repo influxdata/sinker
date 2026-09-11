@@ -5,4 +5,5 @@ resources:
   - crd.yml
   - deployment.yml
   - namespace.yaml
+  - podmonitor.yml
   - serviceaccount.yml
