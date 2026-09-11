@@ -173,6 +173,98 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    #[rstest]
+    #[case::uppercase("TRUE")]
+    #[case::mixed_case("True")]
+    #[case::numeric("1")]
+    #[case::whitespace(" true ")]
+    #[case::empty("")]
+    fn option_flags_require_exact_true(#[case] value: &str) {
+        let mut sync = crate::test_support::resource_sync();
+        sync.metadata.annotations = Some(std::collections::BTreeMap::from([
+            (FORCE_DELETE_ANNOTATION.into(), value.into()),
+            (DISABLE_TARGET_DELETION_ANNOTATION.into(), value.into()),
+        ]));
+        assert!(!sync.has_force_delete_option_enabled());
+        assert!(!sync.has_disable_target_deletion_option_enabled());
+    }
+
+    #[rstest]
+    #[case::core("v1", "", "v1")]
+    #[case::grouped("apps/v1", "apps", "v1")]
+    fn resource_reference_converts_type_metadata(
+        #[case] api_version: &str,
+        #[case] group: &str,
+        #[case] version: &str,
+    ) {
+        let reference = GVKN {
+            api_version: api_version.into(),
+            kind: "Deployment".into(),
+            name: "application".into(),
+        };
+        assert_eq!(
+            TypeMeta::from(&reference),
+            TypeMeta {
+                api_version: api_version.into(),
+                kind: "Deployment".into()
+            }
+        );
+        assert_eq!(
+            GroupVersionKind::try_from(&reference).expect("parse GVK"),
+            GroupVersionKind::gvk(group, version, "Deployment")
+        );
+    }
+
+    #[test]
+    fn resource_sync_serialization_uses_public_field_names_and_mapping_defaults() {
+        use serde_json::json;
+        let reference = json!({"resourceRef": {"apiVersion": "v1", "kind": "Secret", "name": "credentials"},
+            "cluster": {"namespace": "workloads", "kubeConfig": {"secretRef": {
+                "name": "remote-config", "namespace": "credentials", "key": "config"}}}});
+        let mut spec = json!({"source": reference, "target": reference});
+        let parsed: ResourceSyncSpec =
+            serde_json::from_value(spec.clone()).expect("deserialize omitted mappings");
+        assert!(parsed.mappings.is_empty());
+        assert_eq!(json!(parsed), spec);
+        spec["mappings"] = json!([]);
+        let parsed: ResourceSyncSpec =
+            serde_json::from_value(spec.clone()).expect("deserialize empty mappings");
+        assert!(parsed.mappings.is_empty());
+        assert!(json!(parsed).get("mappings").is_none());
+        spec["mappings"] = json!([{"fromFieldPath": "data", "toFieldPath": "spec"}]);
+        let parsed: ResourceSyncSpec =
+            serde_json::from_value(spec.clone()).expect("deserialize mappings");
+        assert_eq!(parsed.mappings[0].from_field_path.as_deref(), Some("data"));
+        assert_eq!(parsed.mappings[0].to_field_path.as_deref(), Some("spec"));
+        assert_eq!(json!(parsed), spec);
+    }
+
+    #[test]
+    fn container_schema_preserves_arbitrary_spec_in_every_version() {
+        let crd = SinkerContainer::crd_with_manual_schema();
+        assert_eq!(
+            crd.metadata.name.as_deref(),
+            Some("sinkercontainers.sinker.influxdata.io")
+        );
+        assert_eq!(crd.spec.scope, "Namespaced");
+        assert!(!crd.spec.versions.is_empty());
+        for version in crd.spec.versions {
+            let schema = version
+                .schema
+                .expect("version schema")
+                .open_api_v3_schema
+                .expect("OpenAPI schema");
+            assert_eq!(schema.type_.as_deref(), Some("object"));
+            assert_eq!(schema.required, Some(vec!["spec".to_string()]));
+            let properties = schema.properties.expect("schema properties");
+            let spec = properties.get("spec").expect("spec schema");
+            assert_eq!(spec.type_.as_deref(), Some("object"));
+            assert_eq!(spec.x_kubernetes_preserve_unknown_fields, Some(true));
+            assert!(spec.properties.is_none());
+            assert!(spec.additional_properties.is_none());
+        }
+    }
+
     macro_rules! gen_option_flag_tests {
         ($test_name:ident, $method:ident, $annotation_key:expr) => {
             #[rstest]

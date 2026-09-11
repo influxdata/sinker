@@ -220,11 +220,231 @@ impl ClusterResourceRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{api_error, discovery_response, resource_sync, response, MockApi};
     use futures::future::join_all;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
     use rstest::rstest;
+    use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[rstest]
+    #[case::absent(None, false)]
+    #[case::empty(Some(vec![]), false)]
+    #[case::unrelated(Some(vec!["example.com/other"]), false)]
+    #[case::sinker(Some(vec!["example.com/other", FINALIZER]), true)]
+    fn finalizers_are_detected_and_cloned(
+        #[case] finalizers: Option<Vec<&str>>,
+        #[case] expected: bool,
+    ) {
+        let mut sync = resource_sync();
+        sync.metadata.finalizers =
+            finalizers.map(|values| values.into_iter().map(String::from).collect());
+        assert_eq!(sync.has_target_finalizer(), expected);
+        let original = sync.metadata.finalizers.clone();
+        let mut cloned = sync.finalizers_clone_or_empty();
+        assert_eq!(cloned, original.clone().unwrap_or_default());
+        cloned.push("new/finalizer".into());
+        assert_eq!(sync.metadata.finalizers, original);
+    }
+
+    #[rstest]
+    #[case::unanchored("team", "prefix-team-suffix", true)]
+    #[case::anchored("^team$", "prefix-team-suffix", false)]
+    #[case::empty_pattern("", "team-a", true)]
+    #[case::alternatives("^(team-a|team-b)$", "team-b", true)]
+    fn namespace_annotation_uses_regex_matching(
+        #[case] pattern: &str,
+        #[case] namespace: &str,
+        #[case] allowed: bool,
+    ) {
+        let result =
+            verify_kubeconfig_secret_access(namespace, &secret_with_annotation(Some(pattern)));
+        if allowed {
+            result.expect("matching namespace authorized");
+        } else {
+            assert!(matches!(
+                result.expect_err("nonmatching namespace denied"),
+                UnauthorizedKubeconfigAccess()
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn local_client_and_resource_sync_api_do_not_require_discovery() {
+        let mock = MockApi::new(vec![]);
+        let client = cluster_client(None, "team-a", mock.client.clone())
+            .await
+            .expect("local client");
+        assert_eq!(client.default_namespace(), "client-default");
+        let mut sync = resource_sync();
+        assert_eq!(
+            sync.api(client.clone()).resource_url(),
+            "/apis/sinker.influxdata.io/v1alpha1/namespaces/team-a/resourcesyncs"
+        );
+        sync.metadata.namespace = None;
+        assert_eq!(
+            sync.api(client).resource_url(),
+            "/apis/sinker.influxdata.io/v1alpha1/resourcesyncs"
+        );
+        mock.finish(&[]);
+    }
+
+    #[rstest]
+    #[case::namespaced(
+        "ConfigMap",
+        "configmaps",
+        true,
+        Some("team-a"),
+        "/api/v1/namespaces/team-a/configmaps"
+    )]
+    #[case::cluster_scoped("Namespace", "namespaces", false, None, "/api/v1/namespaces")]
+    #[tokio::test]
+    async fn local_api_uses_discovered_scope(
+        #[case] kind: &str,
+        #[case] plural: &str,
+        #[case] namespaced: bool,
+        #[case] namespace: Option<&str>,
+        #[case] url: &str,
+    ) {
+        let mock = MockApi::new(vec![discovery_response(kind, plural, namespaced)]);
+        let mut reference = resource_sync().spec.source;
+        reference.resource_ref.kind = kind.into();
+        let api = reference
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("discover local API");
+        assert_eq!(api.namespace.as_deref(), namespace);
+        assert_eq!(api.ar.kind, kind);
+        assert_eq!(api.resource_url(), url);
+        mock.finish(&[("GET", "/api/v1")]);
+    }
+
+    fn cluster_ref(namespace: Option<&str>) -> ClusterRef {
+        use crate::resources::{KubeConfig, SecretRef};
+        ClusterRef {
+            namespace: Some("workloads".into()),
+            kube_config: KubeConfig {
+                secret_ref: SecretRef {
+                    name: "credentials".into(),
+                    namespace: namespace.map(String::from),
+                    key: "config".into(),
+                },
+            },
+        }
+    }
+
+    #[rstest]
+    #[case::implicit_local(None, "/api/v1/namespaces/team-a/secrets/credentials", false)]
+    #[case::explicit_local(Some("team-a"), "/api/v1/namespaces/team-a/secrets/credentials", false)]
+    #[case::cross_namespace(
+        Some("credential-store"),
+        "/api/v1/namespaces/credential-store/secrets/credentials",
+        true
+    )]
+    #[tokio::test]
+    async fn secret_read_errors_hide_cross_namespace_details(
+        #[case] namespace: Option<&str>,
+        #[case] path: &str,
+        #[case] unauthorized: bool,
+    ) {
+        let mock = MockApi::new(vec![api_error(403)]);
+        let error = cluster_client(Some(&cluster_ref(namespace)), "team-a", mock.client.clone())
+            .await
+            .map(|_| ())
+            .expect_err("secret read fails");
+        if unauthorized {
+            assert!(matches!(error, UnauthorizedKubeconfigAccess()));
+        } else {
+            assert!(
+                matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 403)
+            );
+        }
+        mock.finish(&[("GET", path)]);
+    }
+
+    #[rstest]
+    #[case::same_namespace_without_annotation(None, None, true)]
+    #[case::same_namespace_ignores_denial(None, Some("^denied$"), true)]
+    #[case::cross_namespace_missing_annotation(Some("credential-store"), None, false)]
+    #[case::cross_namespace_denied(Some("credential-store"), Some("^denied$"), false)]
+    #[case::cross_namespace_allowed(Some("credential-store"), Some("^team-a$"), true)]
+    #[tokio::test]
+    async fn secret_authorization_precedes_key_lookup(
+        #[case] namespace: Option<&str>,
+        #[case] annotation: Option<&str>,
+        #[case] allowed: bool,
+    ) {
+        let mut secret = secret_with_annotation(annotation);
+        secret.data = Some(BTreeMap::new());
+        let mock = MockApi::new(vec![response(200, json!(secret))]);
+        let error = cluster_client(Some(&cluster_ref(namespace)), "team-a", mock.client.clone())
+            .await
+            .map(|_| ())
+            .expect_err("missing key or authorization");
+        if allowed {
+            assert!(matches!(error, Error::MissingKeyError(key, name, ns)
+                if key == "config" && name == "credentials" && ns == namespace.unwrap_or("team-a")));
+        } else {
+            assert!(matches!(error, UnauthorizedKubeconfigAccess()));
+        }
+        let path = format!(
+            "/api/v1/namespaces/{}/secrets/credentials",
+            namespace.unwrap_or("team-a")
+        );
+        mock.finish(&[("GET", &path)]);
+    }
+
+    #[rstest]
+    #[case::invalid_utf8(vec![0xff], "utf8")]
+    #[case::invalid_yaml(b"[unterminated".to_vec(), "yaml")]
+    #[case::missing_context(b"apiVersion: v1\nkind: Config\nclusters: []\ncontexts: []\nusers: []\n".to_vec(), "context")]
+    #[tokio::test]
+    async fn invalid_kubeconfigs_return_typed_errors(
+        #[case] bytes: Vec<u8>,
+        #[case] failure: &str,
+    ) {
+        let secret = Secret {
+            data: Some(BTreeMap::from([(
+                "config".into(),
+                k8s_openapi::ByteString(bytes),
+            )])),
+            ..Default::default()
+        };
+        let mock = MockApi::new(vec![response(200, json!(secret))]);
+        let error = cluster_client(Some(&cluster_ref(None)), "team-a", mock.client.clone())
+            .await
+            .map(|_| ())
+            .expect_err("invalid kubeconfig");
+        match failure {
+            "utf8" => assert!(
+                matches!(error, Error::KubeconfigUtf8Error(error) if error.valid_up_to() == 0)
+            ),
+            "yaml" | "context" => assert!(matches!(error, Error::KubeconfigError(_))),
+            _ => unreachable!(),
+        }
+        mock.finish(&[("GET", "/api/v1/namespaces/team-a/secrets/credentials")]);
+    }
+
+    #[test]
+    fn watcher_keys_distinguish_owners_and_resource_connections() {
+        let sync = resource_sync();
+        let reference = sync.spec.source.clone();
+        let key = reference.remote_watcher_key(&sync);
+        assert_eq!(key.object, reference);
+        assert_eq!(key.resource_sync.name, "copy-config");
+        assert_eq!(key.resource_sync.namespace.as_deref(), Some("team-a"));
+        let mut other_sync = sync.clone();
+        other_sync.metadata.namespace = Some("team-b".into());
+        assert_ne!(key, reference.remote_watcher_key(&other_sync));
+        other_sync = sync.clone();
+        other_sync.metadata.name = Some("other-sync".into());
+        assert_ne!(key, reference.remote_watcher_key(&other_sync));
+        let mut remote = reference.clone();
+        remote.cluster = Some(cluster_ref(None));
+        assert_ne!(key, remote.remote_watcher_key(&sync));
+        assert_ne!(key, sync.spec.target.remote_watcher_key(&sync));
+    }
 
     fn secret_with_annotation(value: Option<&str>) -> Secret {
         Secret {
@@ -326,8 +546,7 @@ mod tests {
                 };
                 let ns = if expect_ok {
                     let part: String = (0..2)
-                        .map(|_| rng.sample(Alphanumeric) as char)
-                        .map(|c| c.to_ascii_lowercase())
+                        .map(|_| char::from(rng.random_range(b'a'..=b'z')))
                         .collect();
                     format!("ok-{}", part)
                 } else {
@@ -342,7 +561,7 @@ mod tests {
             .map(|(ns, expect_ok, sec)| {
                 tokio::spawn(async move {
                     let res = verify_kubeconfig_secret_access(&ns, &sec);
-                    (expect_ok, res)
+                    (ns, expect_ok, res)
                 })
             })
             .collect();
@@ -350,9 +569,12 @@ mod tests {
         let outcomes = join_all(handles).await;
 
         for outcome in outcomes {
-            let (expect_ok, res) = outcome.expect("task panicked");
+            let (ns, expect_ok, res) = outcome.expect("task panicked");
             if expect_ok {
-                assert!(res.is_ok(), "expected {:?} to be authorized", res);
+                assert!(
+                    res.is_ok(),
+                    "seed 7: namespace {ns} should be authorized: {res:?}"
+                );
             } else {
                 assert!(matches!(res, Err(UnauthorizedKubeconfigAccess())));
             }

@@ -242,6 +242,206 @@ mod tests {
     use super::*;
 
     #[rstest]
+    #[case::whole_source(None, json!({"data": {"key": "value"}}))]
+    #[case::empty_source_path(Some(""), json!({"data": {"key": "value"}}))]
+    #[case::existing_value(Some("data.key"), json!("value"))]
+    #[case::missing_value(Some("data.missing"), json!(null))]
+    fn source_path_selection(#[case] path: Option<&str>, #[case] expected: serde_json::Value) {
+        let source = json!({"data": {"key": "value"}});
+        assert_eq!(
+            find_field_path(source, &path.map(String::from)).expect("select source"),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::array_element("spec.items[1]", json!("second"))]
+    #[case::quoted_annotation("metadata.annotations['example.com/key']", json!("annotation"))]
+    fn source_paths_support_jsonpath(#[case] path: &str, #[case] expected: serde_json::Value) {
+        let source = json!({"spec": {"items": ["first", "second"]},
+            "metadata": {"annotations": {"example.com/key": "annotation"}}});
+        assert_eq!(
+            find_field_path(source, &Some(path.into())).expect("select source"),
+            expected
+        );
+    }
+
+    #[test]
+    fn source_path_rejects_multiple_matches() {
+        let error = find_field_path(json!({"items": [1, 2]}), &Some("items[*]".into()))
+            .expect_err("ambiguous selection must fail");
+        assert!(matches!(error, Error::JsonPathExactlyOneValue(path) if path == "$.items[*]"));
+    }
+
+    #[test]
+    fn source_path_rejects_invalid_syntax() {
+        let error =
+            find_field_path(json!({}), &Some("items[".into())).expect_err("invalid JSONPath");
+        assert!(matches!(error, Error::JsonPathError(_)));
+    }
+
+    #[rstest]
+    #[case::merge_siblings(json!({"spec": {"keep": 1}}), "spec.new", json!({"spec": {"keep": 1, "new": 2}}))]
+    #[case::replace_leaf(json!({"spec": {"old": 1}}), "spec", json!({"spec": 2}))]
+    #[case::empty_key(json!({}), "", json!({"": 2}))]
+    #[case::array_syntax_is_literal(json!({}), "items[0]", json!({"items[0]": 2}))]
+    fn destination_paths_use_object_keys(
+        #[case] mut root: serde_json::Value,
+        #[case] path: &str,
+        #[case] expected: serde_json::Value,
+    ) {
+        set_field_path(&mut root, path, json!(2)).expect("set field");
+        assert_eq!(root, expected);
+    }
+
+    #[rstest]
+    #[case::null_root(json!(null), "key")]
+    #[case::array_root(json!([]), "key")]
+    #[case::scalar_root(json!(false), "key")]
+    #[case::scalar_intermediate(json!({"spec": "occupied"}), "spec.key")]
+    #[case::array_intermediate(json!({"spec": []}), "spec.key")]
+    #[case::null_intermediate(json!({"spec": null}), "spec.key")]
+    fn destination_paths_reject_non_objects(
+        #[case] mut root: serde_json::Value,
+        #[case] path: &str,
+    ) {
+        let original = root.clone();
+        let error = set_field_path(&mut root, path, json!("leaf")).expect_err("object required");
+        assert!(matches!(error, AddToPathError::ObjectRequired(value) if value == original));
+        assert_eq!(root, original);
+    }
+
+    #[rstest]
+    #[case::missing_api_version(json!({"kind": "ConfigMap"}), "apiVersion")]
+    #[case::non_string_api_version(json!({"apiVersion": 1, "kind": "ConfigMap"}), "apiVersion")]
+    #[case::missing_kind(json!({"apiVersion": "v1"}), "kind")]
+    #[case::non_string_kind(json!({"apiVersion": "v1", "kind": []}), "kind")]
+    fn inner_resource_requires_type_metadata(
+        #[case] subtree: serde_json::Value,
+        #[case] field: &str,
+    ) {
+        let error = get_ar_from_subtree(&subtree).expect_err("malformed inner resource");
+        assert!(matches!(error, Error::MalformedInnerResource(message) if message.contains(field)));
+    }
+
+    #[rstest]
+    #[case::namespaced(Some("destination"))]
+    #[case::cluster_scoped(None)]
+    fn clone_preserves_payload_and_user_metadata_only(#[case] namespace: Option<&str>) {
+        let source: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {
+                "name": "original", "namespace": "source", "uid": "source-uid",
+                "resourceVersion": "123", "generation": 4,
+                "creationTimestamp": "2024-01-01T00:00:00Z", "finalizers": ["other/finalizer"],
+                "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": "owner", "uid": "owner-uid"}],
+                "managedFields": [{"manager": "someone"}],
+                "labels": {"app": "demo"},
+                "annotations": {"example.com/keep": "yes", "kubectl.kubernetes.io/last-applied-configuration": "discard"}
+            },
+            "data": {"nested": [1, null, false]}, "status": {"ready": true}
+        })).expect("source fixture");
+        let original = json!(source);
+        let target_ref = GVKN {
+            api_version: "example.com/v2".into(),
+            kind: "Destination".into(),
+            name: "copy".into(),
+        };
+        let ar = ApiResource::from_gvk(&GroupVersionKind::gvk("example.com", "v2", "Destination"));
+        let target = clone_resource(&source, &target_ref, namespace, &ar).expect("clone source");
+        let mut expected = json!({"apiVersion": "example.com/v2", "kind": "Destination",
+            "metadata": {"name": "copy", "labels": {"app": "demo"}, "annotations": {"example.com/keep": "yes"}},
+            "data": {"nested": [1, null, false]}, "status": {"ready": true}});
+        if let Some(namespace) = namespace {
+            expected["metadata"]["namespace"] = json!(namespace);
+        }
+        assert_eq!(json!(target), expected);
+        assert_eq!(json!(source), original);
+    }
+
+    fn mapped(
+        source: serde_json::Value,
+        paths: &[(Option<&str>, Option<&str>)],
+    ) -> crate::Result<DynamicObject> {
+        let source: DynamicObject = serde_json::from_value(source).expect("source fixture");
+        let mut sync = crate::test_support::resource_sync();
+        sync.spec.mappings = paths
+            .iter()
+            .map(|(from, to)| Mapping {
+                from_field_path: from.map(String::from),
+                to_field_path: to.map(String::from),
+            })
+            .collect();
+        let ar = ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "ConfigMap"));
+        apply_mappings(&source, &sync.spec.target.resource_ref, None, &ar, &sync)
+    }
+
+    #[test]
+    fn empty_mapping_entry_is_an_error() {
+        let error =
+            mapped(json!({"data": {"key": "value"}}), &[(None, None)]).expect_err("empty mapping");
+        assert!(matches!(error, Error::MappingEmpty));
+    }
+
+    #[test]
+    fn mappings_are_ordered_and_missing_sources_become_null() {
+        let target = mapped(
+            json!({"data": {"first": "one", "second": "two"}}),
+            &[
+                (Some("data.first"), Some("data.value")),
+                (Some("data.second"), Some("data.value")),
+                (Some("data.missing"), Some("data.absent")),
+            ],
+        )
+        .expect("apply ordered mappings");
+        assert_eq!(
+            json!(target),
+            json!({"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "target-config"}, "data": {"value": "two", "absent": null}})
+        );
+    }
+
+    #[test]
+    fn root_replacement_discards_earlier_mappings_and_allows_later_mappings() {
+        let target = mapped(json!({"spec": {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"labels": {"app": "embedded"}}, "data": {"embedded": "value"}}, "extra": "after"}), &[
+            (Some("extra"), Some("data.discarded")),
+            (Some("spec"), None),
+            (Some("extra"), Some("data.kept")),
+        ]).expect("replace root");
+        assert_eq!(
+            json!(target),
+            json!({"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "target-config", "labels": {"app": "embedded"}},
+            "data": {"embedded": "value", "kept": "after"}})
+        );
+        assert!(target.data.get("metadata").is_none());
+        assert!(target.data.get("apiVersion").is_none());
+        assert!(target.data.get("kind").is_none());
+    }
+
+    #[test]
+    fn mapping_errors_propagate_from_destination_and_metadata_conversion() {
+        let error = mapped(
+            json!({"value": 42}),
+            &[
+                (Some("value"), Some("data")),
+                (Some("value"), Some("data.child")),
+            ],
+        )
+        .expect_err("cannot traverse scalar");
+        assert!(
+            matches!(error, Error::AddToPathError(AddToPathError::ObjectRequired(value)) if value == json!({"data": 42}))
+        );
+        let error = mapped(
+            json!({"value": 42}),
+            &[(Some("value"), Some("metadata.labels.app"))],
+        )
+        .expect_err("metadata labels must be strings");
+        assert!(matches!(error, Error::SerializationError(error) if error.is_data()));
+    }
+
+    #[rstest]
     #[case("status", r#"{"spec":{},"status":"demo"}"#)]
     #[case("status.foo", r#"{"spec":{},"status":{"keep":1,"foo":"demo"}}"#)]
     #[case(

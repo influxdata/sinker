@@ -215,8 +215,6 @@ async fn reconcile_normally(
     Ok(Action::await_change())
 }
 
-// TODO: Until CDC finalizer is implemented (and even after that if a CDC is deleted using foreground propagation) CDC deletion could cause the cluster to be deleted or unreachable before we have a chance to clean up the resource(s) owned by the ResourceSync, we should be able to detect and handle this scenario gracefully
-// TODO: Immutability on source/target (via CEL?)
 // TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
 
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
@@ -433,20 +431,598 @@ pub async fn run(client: Client) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
+        reconcile, reconcile_deleted_resource, reconcile_helper, reconcile_normally, Context,
+        RemoteWatcherManager,
+    };
+    use super::{
         reconcile_status, sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION,
         RESOURCE_SYNC_SUCCEEDED_REASON,
     };
     use crate::resources::{ResourceSync, ResourceSyncStatus};
+    use crate::test_support::{
+        api_error, discovery_response, resource_sync as sync_fixture, response, MockApi,
+    };
+    use crate::FINALIZER;
     use crate::{Error, Result};
-    use chrono::{TimeDelta, TimeZone};
+    use chrono::TimeZone;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use kube::runtime::controller::Action;
     use once_cell::sync::Lazy;
     use rstest::rstest;
+    use serde_json::json;
+    use std::{sync::Arc, time::Duration};
 
-    static NOW: Lazy<Time> = Lazy::new(|| Time(chrono::Utc::now()));
+    fn context(client: kube::Client) -> Arc<Context> {
+        let (remote_watcher_manager, _events) = RemoteWatcherManager::new(client.clone());
+        Arc::new(Context {
+            client,
+            remote_watcher_manager,
+        })
+    }
+
+    async fn stop_watches(ctx: &Context) {
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            ctx.remote_watcher_manager.stop_all(),
+        )
+        .await
+        .expect("watchers cancel and join");
+    }
+
+    const SYNC_PATH: &str =
+        "/apis/sinker.influxdata.io/v1alpha1/namespaces/team-a/resourcesyncs/copy-config";
+    const STATUS_PATH: &str =
+        "/apis/sinker.influxdata.io/v1alpha1/namespaces/team-a/resourcesyncs/copy-config/status";
+    const SOURCE_PATH: &str = "/api/v1/namespaces/team-a/configmaps/source-config";
+    const TARGET_PATH: &str = "/api/v1/namespaces/team-a/configmaps/target-config";
+
+    #[tokio::test]
+    async fn initialization_preserves_finalizers_and_writes_live_success_status() {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec!["example.com/other".into()]);
+        sync.status = status_with_condition("True");
+        let mut live = sync.clone();
+        live.status = status_with_condition("False");
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!(sync)),
+            response(200, json!(live)),
+            response(200, json!(live)),
+        ]);
+        let result = reconcile(Arc::new(sync), context(mock.client.clone()))
+            .await
+            .expect("initialize sync");
+        assert_eq!(result, Action::requeue(Duration::from_millis(500)));
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("PATCH", SYNC_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
+        assert_eq!(
+            requests[2].body(),
+            &json!({"metadata": {"finalizers": ["example.com/other", FINALIZER]}})
+        );
+        assert_eq!(
+            requests[2].headers()["content-type"],
+            "application/merge-patch+json"
+        );
+        let status: ResourceSyncStatus =
+            serde_json::from_value(requests[4].body()["status"].clone()).expect("status patch");
+        let condition = single_condition(Some(status));
+        assert_eq!(condition.last_transition_time, *EPOCH);
+        assert_eq!(condition.observed_generation, Some(7));
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.message, "Sync succeeded");
+    }
+
+    #[tokio::test]
+    async fn deleted_missing_target_removes_only_our_finalizer_and_skips_status() {
+        let mut sync = sync_fixture();
+        sync.metadata.deletion_timestamp = Some(EPOCH.clone());
+        sync.metadata.finalizers = Some(vec![
+            FINALIZER.into(),
+            "example.com/keep".into(),
+            FINALIZER.into(),
+        ]);
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            api_error(404),
+            response(200, json!(sync)),
+        ]);
+        assert_eq!(
+            reconcile(Arc::new(sync), context(mock.client.clone()))
+                .await
+                .expect("cleanup"),
+            Action::await_change()
+        );
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", TARGET_PATH),
+            ("PATCH", SYNC_PATH),
+        ]);
+        assert_eq!(
+            requests[3].body(),
+            &json!({"metadata": {"finalizers": ["example.com/keep"]}})
+        );
+    }
+
+    #[tokio::test]
+    async fn source_failure_is_returned_and_written_to_status() {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        let mut live = sync.clone();
+        live.status = status_with_condition("True");
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            api_error(404),
+            response(200, json!(live)),
+            response(200, json!(live)),
+        ]);
+        let error = reconcile(Arc::new(sync), context(mock.client.clone()))
+            .await
+            .expect_err("source absent");
+        let message = error.to_string();
+        assert!(
+            matches!(error, Error::ResourceNotFoundError(name, kind, kube::Error::Api(error))
+            if name == "source-config" && kind == "ConfigMap" && error.code == 404)
+        );
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", SOURCE_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
+        let condition = &requests[4].body()["status"]["conditions"][0];
+        assert_eq!(condition["status"], "True");
+        assert_eq!(condition["message"], message);
+        assert_eq!(condition["observedGeneration"], 7);
+        assert_eq!(condition["lastTransitionTime"], json!(*EPOCH));
+    }
+
+    #[rstest]
+    #[case::deleting_target_api_failure(true, true, false, true)]
+    #[case::deleting_source_api_failure(true, true, true, true)]
+    #[case::disabled_force_delete(true, false, false, false)]
+    #[case::active_sync(false, true, false, false)]
+    #[tokio::test]
+    async fn force_delete_only_bypasses_api_resolution_for_deleting_syncs(
+        #[case] deleted: bool,
+        #[case] force: bool,
+        #[case] source_failure: bool,
+        #[case] removed: bool,
+    ) {
+        let mut sync = sync_fixture();
+        sync.metadata.deletion_timestamp = deleted.then(|| EPOCH.clone());
+        sync.metadata.finalizers = Some(vec![FINALIZER.into(), "example.com/keep".into()]);
+        sync.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            crate::resources::FORCE_DELETE_ANNOTATION.into(),
+            force.to_string(),
+        )]));
+        let mut responses = vec![];
+        let mut expected = vec![];
+        if source_failure {
+            responses.push(discovery_response("ConfigMap", "configmaps", true));
+            expected.push(("GET", "/api/v1"));
+        }
+        responses.push(api_error(403));
+        expected.push(("GET", "/api/v1"));
+        if removed {
+            responses.push(response(200, json!(sync)));
+            expected.push(("PATCH", SYNC_PATH));
+        }
+        let mock = MockApi::new(responses);
+        let parent_api = sync.api(mock.client.clone());
+        let result = reconcile_helper(
+            Arc::new(sync),
+            context(mock.client.clone()),
+            &"copy-config".into(),
+            &parent_api,
+        )
+        .await;
+        if removed {
+            assert_eq!(result.expect("force cleanup"), Action::await_change());
+        } else {
+            assert!(
+                matches!(result.expect_err("API resolution failure"), Error::KubeError(kube::Error::Api(error)) if error.code == 403)
+            );
+        }
+        let requests = mock.finish(&expected);
+        if removed {
+            assert_eq!(
+                requests.last().expect("finalizer patch").body(),
+                &json!({"metadata": {"finalizers": ["example.com/keep"]}})
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::no_finalizers(None, false, Some("Foreground"))]
+    #[case::empty_finalizers(Some(vec![]), false, Some("Foreground"))]
+    #[case::target_finalizer(Some(vec!["example.com/target"]), false, Some("Background"))]
+    #[case::already_deleting(Some(vec!["example.com/target"]), true, None)]
+    #[tokio::test]
+    async fn target_deletion_waits_for_absence(
+        #[case] finalizers: Option<Vec<&str>>,
+        #[case] deleting: bool,
+        #[case] propagation: Option<&str>,
+    ) {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        sync.metadata.deletion_timestamp = Some(EPOCH.clone());
+        let target = json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
+            "name": "target-config", "finalizers": finalizers, "deletionTimestamp": deleting.then(|| EPOCH.clone())}});
+        let mut responses = vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, target.clone()),
+        ];
+        let mut expected = vec![("GET", "/api/v1"), ("GET", TARGET_PATH)];
+        if propagation.is_some() {
+            responses.push(response(200, target));
+            expected.push(("DELETE", TARGET_PATH));
+        }
+        let mock = MockApi::new(responses);
+        let ctx = context(mock.client.clone());
+        let _cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+        let parent = sync.api(mock.client.clone());
+        let target_api = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        let result = reconcile_deleted_resource(
+            Arc::new(sync),
+            "copy-config",
+            target_api,
+            &parent,
+            Arc::clone(&ctx),
+        )
+        .await;
+        stop_watches(&ctx).await;
+        assert_eq!(result.expect("request deletion"), Action::await_change());
+        let requests = mock.finish(&expected);
+        if let Some(propagation) = propagation {
+            assert_eq!(requests[2].body()["propagationPolicy"], propagation);
+        }
+    }
+
+    #[rstest]
+    #[case::without_our_finalizer(false, false)]
+    #[case::deletion_disabled(true, true)]
+    #[tokio::test]
+    async fn cleanup_can_skip_target_requests(#[case] finalizer: bool, #[case] disabled: bool) {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(if finalizer {
+            vec![FINALIZER.into()]
+        } else {
+            vec!["example.com/other".into()]
+        });
+        sync.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            crate::resources::DISABLE_TARGET_DELETION_ANNOTATION.into(),
+            disabled.to_string(),
+        )]));
+        let mut responses = vec![discovery_response("ConfigMap", "configmaps", true)];
+        let mut expected = vec![("GET", "/api/v1")];
+        if disabled {
+            responses.push(response(200, json!(sync)));
+            expected.push(("PATCH", SYNC_PATH));
+        }
+        let mock = MockApi::new(responses);
+        let parent = sync.api(mock.client.clone());
+        let target = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        assert_eq!(
+            reconcile_deleted_resource(
+                Arc::new(sync),
+                "copy-config",
+                target,
+                &parent,
+                context(mock.client.clone())
+            )
+            .await
+            .expect("cleanup"),
+            Action::await_change()
+        );
+        let requests = mock.finish(&expected);
+        if disabled {
+            assert_eq!(requests[1].body(), &json!({"metadata": {"finalizers": []}}));
+        }
+    }
+
+    #[rstest]
+    #[case::whole_resource(false, false)]
+    #[case::mapped_resource(true, false)]
+    #[case::remote_target(false, true)]
+    #[tokio::test]
+    async fn target_apply_uses_forced_field_manager_and_local_ownership(
+        #[case] mapped: bool,
+        #[case] remote: bool,
+    ) {
+        let mut sync = sync_fixture();
+        if mapped {
+            sync.spec.mappings = vec![crate::resources::Mapping {
+                from_field_path: Some("data.original".into()),
+                to_field_path: Some("data.copied".into()),
+            }];
+        }
+        let source = json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "source-config"}, "data": {"original": "value"}});
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, source.clone()),
+            response(200, source),
+        ]);
+        let source_api = sync
+            .spec
+            .source
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("source API");
+        let target_api = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        // API resolution is tested separately; this flag determines target ownership.
+        if remote {
+            sync.spec.target.cluster = Some(Default::default());
+        }
+        let ctx = context(mock.client.clone());
+        let _cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+        let result = reconcile_normally(
+            Arc::new(sync),
+            "copy-config",
+            source_api,
+            target_api,
+            Arc::clone(&ctx),
+        )
+        .await;
+        stop_watches(&ctx).await;
+        assert_eq!(result.expect("apply target"), Action::await_change());
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", SOURCE_PATH),
+            ("PATCH", TARGET_PATH),
+        ]);
+        let patch = &requests[3];
+        let query = patch.uri().query().expect("apply parameters");
+        assert!(query.split('&').any(|part| part == "force=true"));
+        assert!(query
+            .split('&')
+            .any(|part| part == "fieldManager=sinker.influxdata.io"));
+        assert_eq!(
+            patch.headers()["content-type"],
+            "application/apply-patch+yaml"
+        );
+        assert_eq!(patch.body()["metadata"]["name"], "target-config");
+        assert_eq!(patch.body()["metadata"]["namespace"], "team-a");
+        assert_eq!(
+            patch.body()["data"],
+            if mapped {
+                json!({"copied": "value"})
+            } else {
+                json!({"original": "value"})
+            }
+        );
+        if remote {
+            assert!(patch.body()["metadata"].get("ownerReferences").is_none());
+        } else {
+            assert_eq!(
+                patch.body()["metadata"]["ownerReferences"],
+                json!([{
+                "apiVersion": "sinker.influxdata.io/v1alpha1", "kind": "ResourceSync", "name": "copy-config",
+                "uid": "sync-uid", "controller": false, "blockOwnerDeletion": true}])
+            );
+        }
+    }
+
+    #[test]
+    fn deletion_errors_still_update_status_and_ignore_unrelated_conditions() {
+        let mut live = status_with_condition("True").expect("status fixture");
+        live.conditions.as_mut().expect("conditions")[0].type_ = "OtherCondition".into();
+        let mut sync = resource_sync(true, None);
+        sync.metadata.generation = Some(9);
+        let before = chrono::Utc::now();
+        let condition = single_condition(reconcile_status(
+            &sync,
+            &Some(live),
+            &Err(Error::NamespaceRequired),
+        ));
+        let after = chrono::Utc::now();
+        assert_eq!(condition.status, "True");
+        assert_eq!(condition.observed_generation, Some(9));
+        assert_eq!(condition.message, "Namespace is required");
+        assert!((before..=after).contains(&condition.last_transition_time.0));
+    }
+
+    #[rstest]
+    #[case::missing_name(true)]
+    #[case::missing_namespace(false)]
+    #[tokio::test]
+    async fn reconciliation_requires_identity_before_api_access(#[case] missing_name: bool) {
+        let mut sync = sync_fixture();
+        let mock = MockApi::new(vec![]);
+        let ctx = context(mock.client.clone());
+        if missing_name {
+            sync.metadata.name = None;
+            assert!(matches!(
+                reconcile(Arc::new(sync), ctx)
+                    .await
+                    .expect_err("name required"),
+                Error::NameRequired
+            ));
+        } else {
+            sync.metadata.namespace = None;
+            let parent = sync.api(mock.client.clone());
+            assert!(matches!(
+                reconcile_helper(Arc::new(sync), ctx, &"copy-config".into(), &parent)
+                    .await
+                    .expect_err("namespace required"),
+                Error::NamespaceRequired
+            ));
+        }
+        mock.finish(&[]);
+    }
+
+    #[rstest]
+    #[case::get_target(false)]
+    #[case::delete_target(true)]
+    #[tokio::test]
+    async fn force_delete_does_not_bypass_target_request_errors(#[case] delete: bool) {
+        let mut sync = sync_fixture();
+        sync.metadata.deletion_timestamp = Some(EPOCH.clone());
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        sync.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            crate::resources::FORCE_DELETE_ANNOTATION.into(),
+            "true".into(),
+        )]));
+        let mut responses = vec![discovery_response("ConfigMap", "configmaps", true)];
+        let mut expected = vec![("GET", "/api/v1"), ("GET", TARGET_PATH)];
+        if delete {
+            responses.push(response(
+                200,
+                json!({"metadata": {"name": "target-config"}}),
+            ));
+            expected.push(("DELETE", TARGET_PATH));
+        }
+        responses.push(api_error(403));
+        let mock = MockApi::new(responses);
+        let target = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        let parent = sync.api(mock.client.clone());
+        let error = reconcile_deleted_resource(
+            Arc::new(sync),
+            "copy-config",
+            target,
+            &parent,
+            context(mock.client.clone()),
+        )
+        .await
+        .expect_err("target request denied");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 403));
+        mock.finish(&expected);
+    }
+
+    #[rstest]
+    #[case::missing_owner_uid(false)]
+    #[case::apply_denied(true)]
+    #[tokio::test]
+    async fn target_write_failures_are_returned(#[case] uid_present: bool) {
+        let mut sync = sync_fixture();
+        if !uid_present {
+            sync.metadata.uid = None;
+        }
+        let mut responses = vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!({"data": {"key": "value"}})),
+        ];
+        let mut expected = vec![("GET", "/api/v1"), ("GET", "/api/v1"), ("GET", SOURCE_PATH)];
+        if uid_present {
+            responses.push(api_error(409));
+            expected.push(("PATCH", TARGET_PATH));
+        }
+        let mock = MockApi::new(responses);
+        let ctx = context(mock.client.clone());
+        let source = sync
+            .spec
+            .source
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("source API");
+        let target = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        let result = reconcile_normally(
+            Arc::new(sync),
+            "copy-config",
+            source,
+            target,
+            Arc::clone(&ctx),
+        )
+        .await;
+        stop_watches(&ctx).await;
+        let error = result.expect_err("target write failure");
+        if uid_present {
+            assert!(
+                matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 409)
+            );
+        } else {
+            assert!(matches!(error, Error::UIDRequired));
+        }
+        mock.finish(&expected);
+    }
+
+    #[rstest]
+    #[case::status_read(false)]
+    #[case::status_write(true)]
+    #[tokio::test]
+    async fn status_api_errors_are_returned(#[case] write: bool) {
+        let sync = sync_fixture();
+        let mut responses = vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!(sync)),
+        ];
+        let mut expected = vec![
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("PATCH", SYNC_PATH),
+            ("GET", STATUS_PATH),
+        ];
+        if write {
+            responses.push(response(200, json!(sync)));
+            expected.push(("PATCH", STATUS_PATH));
+        }
+        responses.push(api_error(403));
+        let mock = MockApi::new(responses);
+        let error = reconcile(Arc::new(sync), context(mock.client.clone()))
+            .await
+            .expect_err("status request denied");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 403));
+        mock.finish(&expected);
+    }
+
+    #[tokio::test]
+    async fn reconciliation_errors_retry_after_five_seconds() {
+        let mock = MockApi::new(vec![]);
+        assert_eq!(
+            super::error_policy(
+                Arc::new(sync_fixture()),
+                &Error::NamespaceRequired,
+                context(mock.client.clone())
+            ),
+            Action::requeue(Duration::from_secs(5))
+        );
+        mock.finish(&[]);
+    }
+
     static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
 
     fn status_with_condition(status: &str) -> Option<ResourceSyncStatus> {
@@ -463,23 +1039,26 @@ mod tests {
     }
 
     #[rstest]
-    #[case::none(None, "True", &NOW)]
-    #[case::no_conditions(Some(ResourceSyncStatus::default()), "True", &NOW)]
-    #[case::empty_conditions(Some(ResourceSyncStatus{conditions: Some(vec![])}), "True", &NOW)]
-    #[case::still_failing_keeps_time(status_with_condition("True"), "True", &EPOCH)]
-    #[case::still_succeeding_keeps_time(status_with_condition("False"), "False", &EPOCH)]
-    #[case::failure_after_success_transitions(status_with_condition("False"), "True", &NOW)]
-    #[case::success_after_failure_transitions(status_with_condition("True"), "False", &NOW)]
-    #[tokio::test]
-    async fn test_sync_failing_transition_time(
+    #[case::none(None, "True", None)]
+    #[case::no_conditions(Some(ResourceSyncStatus::default()), "True", None)]
+    #[case::empty_conditions(Some(ResourceSyncStatus{conditions: Some(vec![])}), "True", None)]
+    #[case::still_failing_keeps_time(status_with_condition("True"), "True", Some(&*EPOCH))]
+    #[case::still_succeeding_keeps_time(status_with_condition("False"), "False", Some(&*EPOCH))]
+    #[case::failure_after_success_transitions(status_with_condition("False"), "True", None)]
+    #[case::success_after_failure_transitions(status_with_condition("True"), "False", None)]
+    fn test_sync_failing_transition_time(
         #[case] status: Option<ResourceSyncStatus>,
         #[case] new_status: &str,
-        #[case] expected: &Time,
+        #[case] expected: Option<&Time>,
     ) {
+        let before = chrono::Utc::now();
         let result = sync_failing_transition_time(&status, new_status);
-        let diff = (result.0 - expected.0).abs();
-
-        assert!(diff.le(&TimeDelta::minutes(1)))
+        let after = chrono::Utc::now();
+        if let Some(expected) = expected {
+            assert_eq!(&result, expected);
+        } else {
+            assert!((before..=after).contains(&result.0));
+        }
     }
 
     fn resource_sync(deleted: bool, status: Option<ResourceSyncStatus>) -> ResourceSync {

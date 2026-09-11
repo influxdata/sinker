@@ -133,4 +133,38 @@ mod tests {
         };
         assert_eq!(resource.was_last_modified_by(&MANAGER), expected);
     }
+
+    #[rstest]
+    #[case::unknown_manager(None, Some(false))]
+    #[case::sinker_manager(Some("sinker.influxdata.io"), Some(true))]
+    #[case::external_manager(Some("external"), Some(false))]
+    fn latest_entry_wins_regardless_of_position(
+        #[case] manager: Option<&str>,
+        #[case] expected: Option<bool>,
+    ) {
+        let latest = Time(
+            chrono::Utc
+                .timestamp_opt(1_700_000_000, 0)
+                .single()
+                .expect("fixed timestamp"),
+        );
+        let old = ManagedFieldsEntry {
+            manager: Some("sinker.influxdata.io".into()),
+            time: Some(EPOCH.clone()),
+            ..Default::default()
+        };
+        let current = ManagedFieldsEntry {
+            manager: manager.map(String::from),
+            time: Some(latest),
+            ..Default::default()
+        };
+        for entries in [vec![old.clone(), current.clone()], vec![current, old]] {
+            let mut resource = crate::test_support::resource_sync();
+            resource.metadata.managed_fields = Some(entries);
+            assert_eq!(
+                resource.was_last_modified_by("sinker.influxdata.io"),
+                expected
+            );
+        }
+    }
 }
