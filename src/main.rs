@@ -53,10 +53,14 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         None => {
+            let mut registry = Default::default();
+            let metrics = kubert::runtime::RuntimeMetrics::register(&mut registry);
+
             let rt = kubert::Runtime::builder()
                 .with_log(log_level, log_format)
-                .with_admin(admin)
+                .with_admin(admin.into_builder().with_prometheus(registry))
                 .with_client(client)
+                .with_metrics(metrics)
                 .build()
                 .await?;
 
