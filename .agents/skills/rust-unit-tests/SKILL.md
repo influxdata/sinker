@@ -9,7 +9,8 @@ description: Write comprehensive Rust unit tests for a user-specified file, modu
 # Rust Unit Tests
 
 Write focused tests that comprehensively exercise the requested behavior. Preserve existing regression coverage and
-keep changes within the requested code path.
+keep changes within the requested code path. Aim for 100% code coverage of that scope as much as reasonably possible,
+using measured coverage profiles to find gaps and guide additional cases.
 
 ## Workflow
 
@@ -17,12 +18,15 @@ keep changes within the requested code path.
    to locate the target. Inspect its implementation, callers, existing tests, and relevant documented invariants before
    choosing cases. File links in this skill are relative to this file.
 2. Map reachable branches, boundary values, relevant parameter combinations, and success and error outcomes. Include
-   absent, empty, default, and non-default inputs where they produce distinct behavior. Aim for complete coverage of the
-   requested code path; explain gaps that require an external system or cannot reasonably be exercised.
+   absent, empty, default, and non-default inputs where they produce distinct behavior, plus the explicit combinations
+   described under [Regression-Resistant Cases](#regression-resistant-cases).
 3. Add or extend an inline `#[cfg(test)]` module beside the implementation, following Sinker's existing layout. Reuse setup
    helpers where useful, but keep each case's inputs and expected behavior visible. Avoid widening production visibility
    solely to test private helpers.
-4. Run the focused tests, then the required repository checks described under [Verification](#verification). Report
+4. Run the focused tests and generate coverage profiles as described under [Coverage evaluation](#coverage-evaluation).
+   Inspect uncovered code, add meaningful cases for remaining reachable paths, and regenerate profiles after changes
+   until the requested scope reaches 100% where reasonable or the remaining gaps have concrete explanations.
+5. Complete the required repository checks described under [Verification](#verification). Report measured coverage,
    assumptions, remaining gaps, and checks actually run; do not claim a coverage percentage without measurement.
 
 ## Dependencies and test style
@@ -41,6 +45,23 @@ the project does not currently include an assertion library or temporary-directo
   expected values independently of the implementation so tests can detect regressions.
 - Use `#[should_panic(expected = "...")]` only for intentional panic contracts. Report accidental panics encountered
   while designing cases instead of treating them as required behavior.
+
+## Regression-Resistant Cases
+
+- Preemptively add explicit cases for complicated combinations of input parameters, even when simpler tests already
+  imply the same outcome under the current implementation. Preserve these cases during refactors even if they add no
+  measured coverage.
+- When a function loops over an input slice, array, `Vec`, or map, include explicit cases with multiple items as much
+  as reasonably possible, alongside relevant empty and single-item cases.
+- When a loop body has multiple logical branches, use mixed-item cases that hit and verify each reachable branch
+  multiple times when practical. Assert ordering, accumulation, mutation, and error handling across repeated iterations
+  where applicable. For early returns or errors propagated with `?`, use separate cases to place the stopping condition
+  after earlier work and verify observable effects and skipped later work. Respect the collection's ordering contract;
+  do not assume `HashMap` iteration order.
+- When independent inputs can interact, cover meaningful combinations of flags, `None`, default and populated values
+  (including relevant `Some` values), valid and invalid entries, duplicates where representable, and collaborators that
+  succeed or fail. Prioritize combinations likely to regress during future refactors without an exhaustive Cartesian
+  product. Keep each case's expected outcome explicit.
 
 ## Assertions and errors
 
@@ -94,6 +115,24 @@ collection. Read the relevant [implementation constraints](../../../AGENTS.md#im
 mapping, status, access checks, or watch cleanup. If the requested behavior requires live verification, report that gap
 and follow the repository's live-testing instructions only when that work is in scope.
 
+## Coverage evaluation
+
+For test additions, improvements, or coverage reviews, use an appropriate Rust coverage tool to build profiles and
+evaluate completeness. Prefer `cargo-llvm-cov` with LLVM tools compatible with the repository's pinned toolchain;
+an equivalent tool is acceptable if it supplies useful coverage data for the requested scope. Read the
+[coverage profiling workflow](references/coverage.md) before collecting profiles for commands, prerequisites, and
+report interpretation. If tooling cannot run, report the specific blocker and mark coverage as unmeasured.
+
+Inspect per-file and relevant function or region details for the requested production code, including zero-hit paths;
+a repository-wide total alone cannot establish completeness for a scoped task. Review line, region, and function
+coverage and branch coverage when supported. Explain unsupported metrics. Cross-check reports against the branch and
+case inventory: 100% line coverage does not establish complete branch, input-combination, or assertion coverage.
+
+Use uncovered paths to choose the next cases, retaining the [regression-resistant cases](#regression-resistant-cases)
+even when percentages no longer increase. Explain each remaining gap, such as an unreachable defensive branch,
+platform-specific code, or behavior requiring an external system. Preserve production contracts and meaningful
+assertions; do not remove behavior or hide reachable code from reports solely to reach 100%.
+
 ## Verification
 
 Run commands from the repository root. Cargo filters match module or test names, not file paths: replace `<filter>` in
@@ -106,5 +145,6 @@ including the full locked test suite. Use its additional checks if the task also
 For skill-only edits, validate frontmatter, relative links, and claims against the sources; execute examples only when
 needed to substantiate them.
 
-Summarize the behavior covered, verification results, and any untested paths or existing failures. Distinguish local
-unit-test results from live behavior and commands inspected from commands executed.
+Summarize the behavior covered, verification results, and any untested paths or existing failures. For measured coverage,
+include the tool and commands, test and report scope, features, exclusions, measured metrics, and profile/report paths.
+Distinguish local unit-test results from live behavior and commands inspected from commands executed.
