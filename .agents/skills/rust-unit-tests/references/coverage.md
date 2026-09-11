@@ -31,14 +31,15 @@ For a full-suite profile and multiple report formats from the same test executio
 sinker_coverage_dir="$(mktemp -d "${TMPDIR:-/tmp}/sinker-coverage.XXXXXX")"
 export CARGO_LLVM_COV_TARGET_DIR="$sinker_coverage_dir/target"
 cargo llvm-cov --locked --all-features --json --output-path "$sinker_coverage_dir/coverage.json"
-cargo llvm-cov report --locked --all-features --html --output-dir "$sinker_coverage_dir/html"
-cargo llvm-cov report --locked --all-features --show-missing-lines > "$sinker_coverage_dir/missing-lines.txt"
+cargo llvm-cov report --locked --html --output-dir "$sinker_coverage_dir/html"
+cargo llvm-cov report --locked --show-missing-lines > "$sinker_coverage_dir/missing-lines.txt"
 ```
 
 Run these sequentially and check every exit status. The first Cargo command runs instrumented tests and produces
 profiles plus a JSON export; the `report` commands reuse those profiles. Preserve the directory path for review. Keep
-the same coverage target directory and build options for reporting. The example covers the normal test targets with
-all features enabled; it does not instrument doctests or exercise live Kubernetes behavior.
+the same coverage target directory and applicable build options for reporting. Set feature flags on the collection
+command; `cargo-llvm-cov 0.9.1` rejects `--all-features` on `report` despite listing it in help. The example covers the
+normal test targets with all features enabled; it does not instrument doctests or exercise live Kubernetes behavior.
 
 For quicker iteration, use `cargo llvm-cov test --locked --all-features <filter> --json --output-path <path>` with
 verified test names and actual output paths. Test selection and report scope are separate: a test-name filter does not
