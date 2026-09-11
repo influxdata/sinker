@@ -55,6 +55,8 @@ async fn main() -> anyhow::Result<()> {
         None => {
             let mut registry = Default::default();
             let metrics = kubert::runtime::RuntimeMetrics::register(&mut registry);
+            // Register before the admin server takes ownership of the registry.
+            // These shared handles keep reconciliation updates visible at /metrics.
             let controller_metrics = sinker::metrics::ControllerMetrics::register(&mut registry);
 
             let rt = kubert::Runtime::builder()

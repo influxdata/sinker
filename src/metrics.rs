@@ -1,4 +1,9 @@
 //! ResourceSync reconciliation metrics compatible with controller-runtime dashboards.
+//!
+//! The controller passes each complete reconciliation future through these collectors;
+//! watched-object events and queued retries are not themselves reconciliation attempts.
+//! Registration joins the existing admin registry, while cloned handles let concurrent
+//! attempts contribute to the same process-wide series.
 
 use std::{future::Future, time::Duration, time::Instant};
 
@@ -15,6 +20,9 @@ const RESULTS: [&str; 4] = ["success", "error", "requeue", "requeue_after"];
 /// Register once in the registry served by the admin endpoint, then pass the
 /// returned handles to [`crate::controller::run_with_metrics`]. Clones update the
 /// same series. The default value collects metrics without exposing them.
+///
+/// Series aggregate all ResourceSync objects handled by this process. Object names,
+/// namespaces, and remote cluster identities are intentionally not metric labels.
 #[derive(Clone, Debug)]
 pub struct ControllerMetrics {
     active_workers: Gauge,
@@ -23,6 +31,7 @@ pub struct ControllerMetrics {
 }
 
 impl Default for ControllerMetrics {
+    /// Create independent, zeroed collectors without adding them to a registry.
     fn default() -> Self {
         let reconcile_total: Family<_, Counter> = Family::default();
         // Expose zero-valued outcomes before the first attempt, including outcomes
@@ -49,10 +58,17 @@ impl Default for ControllerMetrics {
 impl ControllerMetrics {
     /// Register the dashboard's metric families, labeled `controller="resourcesync"`.
     ///
-    /// Call once per registry. Namespace, pod, service, and cluster labels belong
-    /// to the scrape configuration, not the resources being reconciled.
+    /// Call once per registry: each call creates fresh collectors, rather than
+    /// looking up earlier registrations. All series are exposed at zero immediately.
+    /// The registry owns clones, so moving it into the admin server leaves the
+    /// returned handles connected to the exposed series.
+    ///
+    /// Namespace, pod, service, and cluster labels belong to the scrape configuration,
+    /// not the resources being reconciled.
     pub fn register(registry: &mut Registry) -> Self {
         let metrics = Self::default();
+        // Scope this label to our collectors; Kubert's existing client and runtime
+        // metrics in the parent registry must retain their own label sets.
         let registry =
             registry.sub_registry_with_label(("controller".into(), "resourcesync".into()));
         registry.register(
@@ -74,6 +90,12 @@ impl ControllerMetrics {
         metrics
     }
 
+    /// Measure a reconciler future and return its action or error unchanged.
+    ///
+    /// Timing starts on the first poll and includes time suspended at `.await`
+    /// points, but excludes time waiting in the controller queue. Dropping an
+    /// unpolled future records nothing. Cancellation and panic unwinding release
+    /// the worker and record elapsed time, without a completed-result label.
     pub(crate) async fn instrument<E>(
         &self,
         reconcile: impl Future<Output = Result<Action, E>>,
@@ -86,6 +108,8 @@ impl ControllerMetrics {
         let result = reconcile.await;
         // Classify the returned result before kube applies its error policy: an
         // error retried after five seconds is still an error, not requeue_after.
+        // Action has no public duration accessor; equality with its constructors
+        // distinguishes waiting for events, an immediate retry, and a timed retry.
         let outcome = match &result {
             Err(_) => "error",
             Ok(action) if *action == Action::await_change() => "success",
@@ -101,6 +125,9 @@ impl ControllerMetrics {
 
 /// Release the worker and record elapsed time even if a polled future is canceled
 /// or unwinds. Only completed attempts increment a result counter.
+///
+/// Each guard balances one worker increment. Keeping it inside the async body
+/// ties cleanup to the lifetime of the attempt, including all suspended polls.
 struct ReconcileAttempt<'a> {
     metrics: &'a ControllerMetrics,
     started: Instant,
@@ -132,6 +159,8 @@ mod tests {
         text
     }
 
+    // Inspect the exposed series rather than collector handles: get_or_create
+    // could otherwise create a missing series and conceal a registration defect.
     fn samples(registry: &Registry) -> BTreeMap<String, f64> {
         let mut samples = BTreeMap::new();
         for line in encoded(registry)
@@ -149,6 +178,8 @@ mod tests {
         samples
     }
 
+    // Result counts follow OUTCOMES. Observations can exceed their sum because
+    // canceled and unwound attempts contribute elapsed time without an outcome.
     fn assert_state(registry: &Registry, active: u32, results: [u32; 4], observations: u32) {
         let samples = samples(registry);
         assert_eq!(
@@ -341,6 +372,8 @@ mod tests {
         assert!(poll!(first.as_mut()).is_pending());
         assert!(poll!(second.as_mut()).is_pending());
         assert_state(&registry, 2, [0; 4], 0);
+        // Both attempts span this interval, making twice its length a lower bound
+        // on their combined duration without relying on a scheduler sleep.
         let lower_bound = 2.0 * after_start.elapsed().as_secs_f64();
 
         if cancel_first {
@@ -364,6 +397,7 @@ mod tests {
             assert_state(&registry, 1, counts, 1);
             drop(second);
         }
+        // Each attempt fits within the outer interval, regardless of which ends first.
         let upper_bound = 2.0 * before.elapsed().as_secs_f64();
         assert_state(&registry, 0, counts, 2);
         let sum = duration_sum(&registry);
@@ -378,6 +412,7 @@ mod tests {
         let mut registry = Registry::default();
         let metrics = ControllerMetrics::register(&mut registry);
         let polled = std::cell::Cell::new(false);
+        // This body must remain unexecuted: constructing a future is not an attempt.
         drop(metrics.instrument(async {
             polled.set(true);
             Ok::<_, ()>(Action::await_change())

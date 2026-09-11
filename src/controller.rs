@@ -244,7 +244,8 @@ async fn reconcile_with_metrics(
     ctx: Arc<Context>,
     metrics: ControllerMetrics,
 ) -> Result<Action> {
-    // Include early validation, finalizers, and status requests in the attempt.
+    // Wrap the outer reconciliation: timing only reconcile_helper would exclude
+    // status I/O and could label failed status requests as successful target work.
     metrics.instrument(reconcile(resource_sync, ctx)).await
 }
 
@@ -438,6 +439,7 @@ fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Conte
 
 /// Run the ResourceSync controller without exporting reconciliation metrics.
 /// Use [`run_with_metrics`] to share the admin server's registry.
+/// The controller lifecycle is otherwise identical to the instrumented entrypoint.
 #[expect(
     clippy::result_large_err,
     reason = "Preserve the public Error variants without boxing"
@@ -446,7 +448,15 @@ pub async fn run(client: Client) -> Result<()> {
     run_with_metrics(client, ControllerMetrics::default()).await
 }
 
-/// Run the ResourceSync controller using metrics registered with the admin server.
+/// Run the ResourceSync controller with the supplied metric handles.
+///
+/// Register them with [`ControllerMetrics::register`] before moving the registry
+/// into the admin server. This function watches ResourceSyncs in all namespaces;
+/// it does not create or serve a metrics endpoint itself.
+///
+/// Graceful signal shutdown finishes active reconciliations before canceling and
+/// joining the managed object watches. If the initial CRD list fails, this function
+/// logs the failure and exits the process with status 1 instead of returning an error.
 #[expect(
     clippy::result_large_err,
     reason = "Preserve the public Error variants without boxing"
@@ -480,6 +490,8 @@ pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Res
         .reconcile_on(remote_objects_trigger)
         .shutdown_on_signal()
         .run(
+            // Each future owns shared handles; its guard starts counting only
+            // when kube polls the attempt, not when an event is enqueued.
             move |resource_sync, ctx| reconcile_with_metrics(resource_sync, ctx, metrics.clone()),
             error_policy,
             Arc::clone(&ctx),
@@ -1297,6 +1309,8 @@ mod tests {
         ]);
         let (started, waiting) = tokio::sync::oneshot::channel();
         let (resume, resumed) = tokio::sync::oneshot::channel();
+        // Pause only the chosen status operation after initialization has run,
+        // so the assertions below prove the outer attempt still owns a worker.
         let mut gate = Some((started, resumed));
         let client = mock.client.clone();
         let service = tower::service_fn(move |request: http::Request<kube::client::Body>| {
