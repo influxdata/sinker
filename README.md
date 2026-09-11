@@ -17,7 +17,7 @@ objects and reapplies the desired target when they change.
 ### Prerequisites
 
 - A Kubernetes cluster for the controller and its CRDs, with permission to install CRDs, RBAC, and a Deployment.
-  Target writes use server-side apply. The repository selects Kubernetes 1.33 API bindings at build time;
+  Target writes use server-side apply. The repository selects Kubernetes 1.36 API bindings at build time;
   this is not a tested minimum cluster version.
 - `kubectl` with Kustomize support.
 - The Rust toolchain selected by [rust-toolchain.toml](rust-toolchain.toml), currently `1.98.1`, when building locally.
