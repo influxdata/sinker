@@ -840,6 +840,7 @@ mod tests {
     #[case::whole_resource(false, false)]
     #[case::mapped_resource(true, false)]
     #[case::remote_target(false, true)]
+    #[case::mapped_remote_target(true, true)]
     #[tokio::test]
     async fn target_apply_uses_forced_field_manager_and_local_ownership(
         #[case] mapped: bool,
@@ -1071,6 +1072,115 @@ mod tests {
         mock.finish(&expected);
     }
 
+    #[tokio::test]
+    async fn invalid_mappings_skip_target_write_and_report_failure() {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        sync.spec.mappings = vec![
+            crate::resources::Mapping {
+                from_field_path: Some("data.key".into()),
+                to_field_path: Some("data.copied".into()),
+            },
+            crate::resources::Mapping::default(),
+            crate::resources::Mapping {
+                from_field_path: Some("invalid[".into()),
+                to_field_path: Some("data.later".into()),
+            },
+        ];
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!({"data": {"key": "value"}})),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+        ]);
+        let ctx = context(mock.client.clone());
+        let error = reconcile(Arc::new(sync), Arc::clone(&ctx)).await;
+        stop_watches(&ctx).await;
+        assert!(matches!(
+            error.expect_err("empty mapping"),
+            Error::MappingEmpty
+        ));
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", SOURCE_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
+        let condition = &requests[4].body()["status"]["conditions"][0];
+        assert_eq!(condition["status"], "True");
+        assert_eq!(condition["reason"], RESOURCE_SYNC_FAILING_CONDITION);
+        assert_eq!(condition["message"], Error::MappingEmpty.to_string());
+    }
+
+    #[rstest]
+    #[case::adding(false)]
+    #[case::removing(true)]
+    #[tokio::test]
+    async fn finalizer_patch_errors_are_returned(#[case] deleting: bool) {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec!["example.com/keep".into()]);
+        if deleting {
+            sync.metadata.deletion_timestamp = Some(EPOCH.clone());
+            sync.metadata
+                .finalizers
+                .as_mut()
+                .expect("finalizers")
+                .push(FINALIZER.into());
+        }
+        let mut responses = vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+        ];
+        let mut expected = vec![("GET", "/api/v1"), ("GET", "/api/v1")];
+        if deleting {
+            responses.push(api_error(404));
+            expected.push(("GET", TARGET_PATH));
+        }
+        responses.push(api_error(409));
+        expected.push(("PATCH", SYNC_PATH));
+        let mock = MockApi::new(responses);
+        let ctx = context(mock.client.clone());
+        let mut cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+        let parent = sync.api(mock.client.clone());
+        let result = reconcile_helper(
+            Arc::new(sync),
+            Arc::clone(&ctx),
+            &"copy-config".into(),
+            &parent,
+        )
+        .await;
+        // Cleanup stops both watches before attempting the finalizer patch, even if it fails.
+        let cancellations_before_cleanup: Vec<_> =
+            std::iter::from_fn(|| cancelled.try_recv().ok()).collect();
+        stop_watches(&ctx).await;
+        let error = result.expect_err("finalizer patch conflict");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 409));
+        assert_eq!(
+            cancellations_before_cleanup.len(),
+            if deleting { 2 } else { 0 }
+        );
+        if deleting {
+            assert_ne!(
+                cancellations_before_cleanup[0].object,
+                cancellations_before_cleanup[1].object
+            );
+        }
+        let requests = mock.finish(&expected);
+        let finalizers = if deleting {
+            json!(["example.com/keep"])
+        } else {
+            json!(["example.com/keep", FINALIZER])
+        };
+        assert_eq!(
+            requests.last().expect("finalizer patch").body(),
+            &json!({"metadata": {"finalizers": finalizers}})
+        );
+    }
+
     #[rstest]
     #[case::status_read(false)]
     #[case::status_write(true)]
@@ -1151,6 +1261,33 @@ mod tests {
         } else {
             assert!((before..=after).contains(&result.0));
         }
+    }
+
+    #[rstest]
+    #[case::first(0)]
+    #[case::middle(1)]
+    #[case::last(2)]
+    fn transition_time_finds_the_sync_condition_among_other_conditions(#[case] position: usize) {
+        let expected = Time(Timestamp::from_second(1_700_000_000).expect("fixed timestamp"));
+        let mut matching = single_condition(status_with_condition("True"));
+        matching.last_transition_time = expected.clone();
+        let mut unrelated = matching.clone();
+        unrelated.type_ = "Unrelated".into();
+        unrelated.last_transition_time = EPOCH.clone();
+        let mut another = unrelated.clone();
+        another.type_ = "AnotherCondition".into();
+        another.status = "False".into();
+        let mut conditions = vec![unrelated, another];
+        conditions.insert(position, matching);
+        assert_eq!(
+            sync_failing_transition_time(
+                &Some(ResourceSyncStatus {
+                    conditions: Some(conditions)
+                }),
+                "True"
+            ),
+            expected,
+        );
     }
 
     fn resource_sync(deleted: bool, status: Option<ResourceSyncStatus>) -> ResourceSync {

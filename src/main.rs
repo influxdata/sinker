@@ -244,4 +244,30 @@ mod tests {
         assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionReset);
         assert_eq!(cause.to_string(), "connection reset by test peer");
     }
+
+    #[tokio::test]
+    async fn controller_client_retains_other_legacy_error_variants() {
+        let service = tower::service_fn(|_: Request<LegacyBody>| async {
+            Err::<Response<LegacyBody>, _>(kubert::client::Error::ReadEvents(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid event bytes",
+            )))
+        });
+        let client = controller_client(LegacyClient::new(service, "workloads"));
+        let error = client
+            .send(Request::new(Body::empty()))
+            .await
+            .expect_err("legacy error");
+        let kube::Error::Service(source) = error else {
+            panic!("expected service error, got {error:?}");
+        };
+        let legacy = source
+            .downcast_ref::<kubert::client::Error>()
+            .expect("legacy error retained");
+        let kubert::client::Error::ReadEvents(cause) = legacy else {
+            panic!("expected event read error, got {legacy:?}");
+        };
+        assert_eq!(cause.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(cause.to_string(), "invalid event bytes");
+    }
 }

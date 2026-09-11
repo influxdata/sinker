@@ -336,6 +336,20 @@ mod tests {
         mock.finish(&[("GET", "/api/v1")]);
     }
 
+    #[tokio::test]
+    async fn discovery_must_contain_the_requested_kind() {
+        let mock = MockApi::new(vec![discovery_response("Secret", "secrets", true)]);
+        let reference = resource_sync().spec.source;
+        let error = reference
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .map(|_| ())
+            .expect_err("ConfigMap missing from discovery");
+        assert!(matches!(error, Error::KubeError(kube::Error::Discovery(
+            kube::error::DiscoveryError::MissingKind(kind))) if kind.contains("ConfigMap")));
+        mock.finish(&[("GET", "/api/v1")]);
+    }
+
     fn cluster_ref(namespace: Option<&str>) -> ClusterRef {
         use crate::resources::{KubeConfig, SecretRef};
         ClusterRef {
