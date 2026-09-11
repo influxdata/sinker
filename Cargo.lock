@@ -2426,6 +2426,7 @@ dependencies = [
  "kube",
  "kubert",
  "once_cell",
+ "prometheus-client",
  "rand",
  "regex",
  "rstest",

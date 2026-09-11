@@ -320,6 +320,27 @@ runtime initialization and shutdown, not the health of individual syncs or remot
 `admin` port (`8080`). Configure Prometheus's `podMonitorSelector` and `podMonitorNamespaceSelector` to include this
 monitor and its namespace; see the [Prometheus Operator API reference](https://prometheus-operator.dev/docs/api-reference/api/).
 
+The same registry exposes these controller-runtime-compatible metrics with `controller="resourcesync"`:
+
+| Metric | Meaning |
+| --- | --- |
+| `controller_runtime_active_workers` | Reconciliation attempts currently running. |
+| `controller_runtime_reconcile_total` | Completed attempts by `result`: `success`, `error`, `requeue`, or `requeue_after`. |
+| `controller_runtime_reconcile_time_seconds` | Classic duration histogram in seconds, including `_bucket`, `_sum`, and `_count` series. |
+
+Metrics cover the full attempt, including API resolution, finalizers, and status reads/writes. Successful attempts
+waiting for events count as `success`; finalizer initialization's 500 ms retry counts as `requeue_after`. Failures count
+as `error` even though the error policy schedules a retry. `requeue` represents an immediate successful retry and stays
+zero with the current controller. All series exist before the first attempt. Cancellation or panic unwinding releases
+the active worker and records elapsed time without incrementing a completed-result counter.
+
+These series support the Controller Runtime Controllers Detail dashboard, including its classic histogram fallback.
+Its selectors require scrape labels `namespace`, `pod`, and `service`, plus `k8s_cluster` in the query backend. The bundled
+PodMonitor supplies `service="sinker"`; Prometheus Operator supplies the pod and namespace labels. Configure your cluster's
+`k8s_cluster` label through scrape relabeling or a Prometheus external label propagated to the dashboard's backend, and
+select that backend as the dashboard's Prometheus datasource. Metric labels identify the controller deployment, not the
+source or target resource's namespace or cluster.
+
 Reconciliation errors retry after five seconds; object watches reconnect with backoff. A healthy sync waits for events
 rather than polling on a fixed interval. `ResourceSync` generation filtering tracks name, namespace, and UID, with a
 24-hour cache TTL since the last observation. An event with a new UID or an expired cache entry can trigger reconciliation
@@ -393,6 +414,7 @@ changing resource definitions.
 | [main.rs](src/main.rs), [lib.rs](src/lib.rs) | CLI, runtime wiring, public modules, and shared errors. |
 | [resources.rs](src/resources.rs) | Serialized API fields, annotations, and the manual `SinkerContainer` schema. |
 | [controller.rs](src/controller.rs) | Reconciliation, server-side apply, status, ownership, and cleanup. |
+| [metrics.rs](src/metrics.rs) | Controller metrics, outcome classification, and reconciliation timing. |
 | [resource_extensions.rs](src/resource_extensions.rs) | Client creation, namespace resolution, discovery, and kubeconfig Secret authorization. |
 | [mapping.rs](src/mapping.rs) | Source selection, destination construction, and metadata handling. |
 | [remote_watcher.rs](src/remote_watcher.rs), [remote_watcher_manager.rs](src/remote_watcher_manager.rs), [filters.rs](src/filters.rs) | Watch lifecycle, retries, and filtering of Sinker-generated events. |

@@ -66,6 +66,7 @@ pub mod controller;
 
 mod filters;
 mod mapping;
+pub mod metrics;
 mod remote_watcher;
 mod remote_watcher_manager;
 mod resource_extensions;

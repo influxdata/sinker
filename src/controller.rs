@@ -21,6 +21,7 @@ use tracing::{debug, error, info, warn};
 use util::{WithItemAdded, WithItemRemoved};
 
 use crate::mapping::{apply_mappings, clone_resource};
+use crate::metrics::ControllerMetrics;
 use crate::remote_watcher_manager::RemoteWatcherManager;
 use crate::resource_extensions::NamespacedApi;
 use crate::resources::ResourceSyncStatus;
@@ -238,6 +239,20 @@ async fn reconcile_normally(
     clippy::result_large_err,
     reason = "Preserve the public Error variants without boxing"
 )]
+async fn reconcile_with_metrics(
+    resource_sync: Arc<ResourceSync>,
+    ctx: Arc<Context>,
+    metrics: ControllerMetrics,
+) -> Result<Action> {
+    // Wrap the outer reconciliation: timing only reconcile_helper would exclude
+    // status I/O and could label failed status requests as successful target work.
+    metrics.instrument(reconcile(resource_sync, ctx)).await
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
     let name = resource_sync
         .metadata
@@ -422,11 +437,31 @@ fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Conte
     Action::requeue(Duration::from_secs(5))
 }
 
+/// Run the ResourceSync controller without exporting reconciliation metrics.
+/// Use [`run_with_metrics`] to share the admin server's registry.
+/// The controller lifecycle is otherwise identical to the instrumented entrypoint.
 #[expect(
     clippy::result_large_err,
     reason = "Preserve the public Error variants without boxing"
 )]
 pub async fn run(client: Client) -> Result<()> {
+    run_with_metrics(client, ControllerMetrics::default()).await
+}
+
+/// Run the ResourceSync controller with the supplied metric handles.
+///
+/// Register them with [`ControllerMetrics::register`] before moving the registry
+/// into the admin server. This function watches ResourceSyncs in all namespaces;
+/// it does not create or serve a metrics endpoint itself.
+///
+/// Graceful signal shutdown finishes active reconciliations before canceling and
+/// joining the managed object watches. If the initial CRD list fails, this function
+/// logs the failure and exits the process with status 1 instead of returning an error.
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
+pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Result<()> {
     let docs = Api::<ResourceSync>::all(client.clone());
     if let Err(e) = docs.list(&ListParams::default().limit(1)).await {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
@@ -454,7 +489,13 @@ pub async fn run(client: Client) -> Result<()> {
     Controller::for_stream(resource_syncs, reader)
         .reconcile_on(remote_objects_trigger)
         .shutdown_on_signal()
-        .run(reconcile, error_policy, Arc::clone(&ctx))
+        .run(
+            // Each future owns shared handles; its guard starts counting only
+            // when kube polls the attempt, not when an event is enqueued.
+            move |resource_sync, ctx| reconcile_with_metrics(resource_sync, ctx, metrics.clone()),
+            error_policy,
+            Arc::clone(&ctx),
+        )
         .filter_map(|x| async move { Result::ok(x) })
         .for_each(|_| futures::future::ready(()))
         .await;
@@ -467,8 +508,8 @@ pub async fn run(client: Client) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        reconcile, reconcile_deleted_resource, reconcile_helper, reconcile_normally, Context,
-        RemoteWatcherManager,
+        reconcile, reconcile_deleted_resource, reconcile_helper, reconcile_normally,
+        reconcile_with_metrics, Context, ControllerMetrics, RemoteWatcherManager,
     };
     use super::{
         reconcile_status, sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION,
@@ -570,6 +611,21 @@ mod tests {
     const SOURCE_PATH: &str = "/api/v1/namespaces/team-a/configmaps/source-config";
     const TARGET_PATH: &str = "/api/v1/namespaces/team-a/configmaps/target-config";
 
+    fn assert_reconcile_metrics(registry: &prometheus_client::registry::Registry, outcome: &str) {
+        let mut text = String::new();
+        prometheus_client::encoding::text::encode(&mut text, registry).expect("encode metrics");
+        assert!(text.contains("controller_runtime_active_workers{controller=\"resourcesync\"} 0\n"));
+        assert!(text.contains(
+            "controller_runtime_reconcile_time_seconds_count{controller=\"resourcesync\"} 1\n"
+        ));
+        for result in ["success", "error", "requeue", "requeue_after"] {
+            let count = u64::from(result == outcome);
+            assert!(text.contains(&format!(
+                "controller_runtime_reconcile_total{{controller=\"resourcesync\",result=\"{result}\"}} {count}\n"
+            )));
+        }
+    }
+
     #[tokio::test]
     async fn initialization_preserves_finalizers_and_writes_live_success_status() {
         let mut sync = sync_fixture();
@@ -584,10 +640,13 @@ mod tests {
             response(200, json!(live)),
             response(200, json!(live)),
         ]);
-        let result = reconcile(Arc::new(sync), context(mock.client.clone()))
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
+        let result = reconcile_with_metrics(Arc::new(sync), context(mock.client.clone()), metrics)
             .await
             .expect("initialize sync");
         assert_eq!(result, Action::requeue(Duration::from_millis(500)));
+        assert_reconcile_metrics(&registry, "requeue_after");
         let requests = mock.finish(&[
             ("GET", "/api/v1"),
             ("GET", "/api/v1"),
@@ -627,12 +686,15 @@ mod tests {
             api_error(404),
             response(200, json!(sync)),
         ]);
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
         assert_eq!(
-            reconcile(Arc::new(sync), context(mock.client.clone()))
+            reconcile_with_metrics(Arc::new(sync), context(mock.client.clone()), metrics)
                 .await
                 .expect("cleanup"),
             Action::await_change()
         );
+        assert_reconcile_metrics(&registry, "success");
         let requests = mock.finish(&[
             ("GET", "/api/v1"),
             ("GET", "/api/v1"),
@@ -658,9 +720,12 @@ mod tests {
             response(200, json!(live)),
             response(200, json!(live)),
         ]);
-        let error = reconcile(Arc::new(sync), context(mock.client.clone()))
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
+        let error = reconcile_with_metrics(Arc::new(sync), context(mock.client.clone()), metrics)
             .await
             .expect_err("source absent");
+        assert_reconcile_metrics(&registry, "error");
         let message = error.to_string();
         assert!(
             matches!(error, Error::ResourceNotFoundError(name, kind, kube::Error::Api(error))
@@ -1204,11 +1269,103 @@ mod tests {
         }
         responses.push(api_error(403));
         let mock = MockApi::new(responses);
-        let error = reconcile(Arc::new(sync), context(mock.client.clone()))
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
+        let error = reconcile_with_metrics(Arc::new(sync), context(mock.client.clone()), metrics)
             .await
             .expect_err("status request denied");
+        assert_reconcile_metrics(&registry, "error");
         assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 403));
         mock.finish(&expected);
+    }
+
+    #[tokio::test]
+    async fn early_validation_failure_counts_as_a_reconciliation_error() {
+        let mut sync = sync_fixture();
+        sync.metadata.name = None;
+        let mock = MockApi::new(vec![]);
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
+        assert!(matches!(
+            reconcile_with_metrics(Arc::new(sync), context(mock.client.clone()), metrics).await,
+            Err(Error::NameRequired)
+        ));
+        assert_reconcile_metrics(&registry, "error");
+        mock.finish(&[]);
+    }
+
+    #[rstest]
+    #[case::status_read("GET")]
+    #[case::status_write("PATCH")]
+    #[tokio::test]
+    async fn metrics_include_pending_status_requests(#[case] blocked_method: &'static str) {
+        let sync = sync_fixture();
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+        ]);
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let (resume, resumed) = tokio::sync::oneshot::channel();
+        // Pause only the chosen status operation after initialization has run,
+        // so the assertions below prove the outer attempt still owns a worker.
+        let mut gate = Some((started, resumed));
+        let client = mock.client.clone();
+        let service = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            let gate = if request.method() == blocked_method && request.uri().path() == STATUS_PATH
+            {
+                Some(gate.take().expect("one blocked status request"))
+            } else {
+                None
+            };
+            let client = client.clone();
+            async move {
+                if let Some((started, resumed)) = gate {
+                    started.send(()).expect("notify status request");
+                    resumed.await.expect("resume status request");
+                }
+                client.send(request).await
+            }
+        });
+        let ctx = context(kube::Client::new(service, "client-default"));
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
+        // Keep the future owned here so assertion failures cancel it, rather than
+        // leaving a detached reconciliation task waiting for a response.
+        let mut future = Box::pin(reconcile_with_metrics(Arc::new(sync), ctx, metrics));
+        tokio::select! {
+            result = &mut future => panic!("reconciliation completed before status resumed: {result:?}"),
+            reached = tokio::time::timeout(Duration::from_secs(2), waiting) => {
+                reached.expect("status request starts").expect("status notification");
+            }
+        }
+        let mut text = String::new();
+        prometheus_client::encoding::text::encode(&mut text, &registry).expect("encode metrics");
+        assert!(text.contains("controller_runtime_active_workers{controller=\"resourcesync\"} 1\n"));
+        assert!(text.contains(
+            "controller_runtime_reconcile_time_seconds_count{controller=\"resourcesync\"} 0\n"
+        ));
+        for outcome in ["success", "error", "requeue", "requeue_after"] {
+            assert!(text.contains(&format!(
+                "controller_runtime_reconcile_total{{controller=\"resourcesync\",result=\"{outcome}\"}} 0\n"
+            )));
+        }
+        resume.send(()).expect("release status response");
+        let result = tokio::time::timeout(Duration::from_secs(2), future)
+            .await
+            .expect("reconciliation completes")
+            .expect("successful initialization");
+        assert_eq!(result, Action::requeue(Duration::from_millis(500)));
+        assert_reconcile_metrics(&registry, "requeue_after");
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("PATCH", SYNC_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
     }
 
     #[tokio::test]

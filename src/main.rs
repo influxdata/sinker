@@ -55,6 +55,9 @@ async fn main() -> anyhow::Result<()> {
         None => {
             let mut registry = Default::default();
             let metrics = kubert::runtime::RuntimeMetrics::register(&mut registry);
+            // Register before the admin server takes ownership of the registry.
+            // These shared handles keep reconciliation updates visible at /metrics.
+            let controller_metrics = sinker::metrics::ControllerMetrics::register(&mut registry);
 
             let rt = kubert::Runtime::builder()
                 .with_log(log_level, log_format)
@@ -64,7 +67,8 @@ async fn main() -> anyhow::Result<()> {
                 .build()
                 .await?;
 
-            let controller = controller::run(controller_client(rt.client()));
+            let controller =
+                controller::run_with_metrics(controller_client(rt.client()), controller_metrics);
 
             // Both runtimes implements graceful shutdown, so poll until both are done
             tokio::join!(controller, rt.run()).1?;
