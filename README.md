@@ -20,6 +20,7 @@ objects and reapplies the desired target when they change.
   Target writes use server-side apply. The repository selects Kubernetes 1.36 API bindings at build time;
   this is not a tested minimum cluster version.
 - `kubectl` with Kustomize support.
+- Prometheus Operator with the `PodMonitor` CRD installed when applying the bundled manifests.
 - The Rust toolchain selected by [rust-toolchain.toml](rust-toolchain.toml), currently `1.98.1`, when building locally.
 - An OCI image builder and a registry accessible to the cluster when building your own container image.
 - For remote clusters, network access from the controller and a usable kubeconfig for each connection.
@@ -44,8 +45,9 @@ The [Dockerfile](Dockerfile) uses cargo-chef for build caching and a distroless 
 
 ### Deploy to Kubernetes
 
-The [bundled manifests](manifests/kustomization.yaml) install both CRDs, a namespace, RBAC, a ServiceAccount, and a
-single-replica Deployment. Customize [deployment.yml](manifests/deployment.yml), directly or through an overlay:
+The [bundled manifests](manifests/kustomization.yaml) install both Sinker CRDs, a namespace, RBAC, a ServiceAccount, a
+single-replica Deployment, and a [PodMonitor](manifests/podmonitor.yml). Customize
+[deployment.yml](manifests/deployment.yml), directly or through an overlay:
 
 - Replace the `sinker:replace_me` image with an image you can pull.
 - Configure the `gar-auth-sinker` image pull Secret, or remove/change `imagePullSecrets` for your registry.
@@ -309,11 +311,14 @@ kubectl -n sinker port-forward deployment/sinker 8080:8080
 # In another terminal:
 curl http://localhost:8080/live
 curl http://localhost:8080/ready
+curl http://localhost:8080/metrics
 ```
 
-The admin server provides `/live` and `/ready`. Readiness reflects runtime initialization and shutdown, not the health
-of individual syncs or remote clusters. **There is currently no registered `/metrics` endpoint**; enabling the dependency's
-Prometheus feature does not configure an exporter in [main.rs](src/main.rs).
+The admin server provides `/live`, `/ready`, and Prometheus metrics at `/metrics` on port `8080`. Readiness reflects
+runtime initialization and shutdown, not the health of individual syncs or remote clusters. The bundled
+[PodMonitor](manifests/podmonitor.yml) selects Sinker pods in its namespace and scrapes `/metrics` through their named
+`admin` port (`8080`). Configure Prometheus's `podMonitorSelector` and `podMonitorNamespaceSelector` to include this
+monitor and its namespace; see the [Prometheus Operator API reference](https://prometheus-operator.dev/docs/api-reference/api/).
 
 Reconciliation errors retry after five seconds; object watches reconnect with backoff. A healthy sync waits for events
 rather than polling on a fixed interval. `ResourceSync` generation filtering tracks name, namespace, and UID, with a
