@@ -148,6 +148,8 @@ spec:
             - source
             - target
             type: object
+            x-kubernetes-validations:
+            - rule: self == oldSelf
           status:
             nullable: true
             properties:

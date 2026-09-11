@@ -4,7 +4,7 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::{
     core::{gvk::ParseGroupVersionError, GroupVersionKind, TypeMeta},
-    CustomResource,
+    CustomResource, KubeSchema,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ impl ResourceSync {
     }
 }
 
-#[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, JsonSchema)]
+#[derive(CustomResource, Debug, Serialize, Deserialize, Default, Clone, KubeSchema)]
 #[kube(
     group = "sinker.influxdata.io",
     version = "v1alpha1",
@@ -42,6 +42,7 @@ impl ResourceSync {
 )]
 #[kube(status = "ResourceSyncStatus")]
 #[serde(rename_all = "camelCase")]
+#[x_kube(validation = "self == oldSelf")]
 pub struct ResourceSyncSpec {
     pub source: ClusterResourceRef,
     pub target: ClusterResourceRef,
