@@ -13,3 +13,7 @@ spec:
   podMetricsEndpoints:
     - port: admin
       path: /metrics
+      relabelings:
+        # PodMonitor discovery has no Service; supply the dashboard's service label.
+        - targetLabel: service
+          replacement: sinker
