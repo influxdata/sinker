@@ -1,20 +1,4 @@
-use kube::runtime::reflector::ObjectRef;
 use kube::Resource;
-use std::collections::HashMap;
-
-use crate::resources::ResourceSync;
-
-/// Retain generation history by name and namespace for the lifetime of the watch.
-/// Kube's predicate filter now expires entries and keys them by UID as well.
-pub(crate) fn generation_changed() -> impl FnMut(&ResourceSync) -> bool {
-    let mut generations = HashMap::new();
-    move |resource| match resource.metadata.generation {
-        Some(generation) => {
-            generations.insert(ObjectRef::from_obj(resource), generation) != Some(generation)
-        }
-        None => true,
-    }
-}
 
 pub trait Filterable {
     fn was_last_modified_by(&self, manager: &str) -> Option<bool>;
@@ -52,58 +36,6 @@ mod tests {
     static NOW: Lazy<Time> =
         Lazy::new(|| Time(Timestamp::from_second(1_700_000_000).expect("fixed timestamp")));
     static EPOCH: Lazy<Time> = Lazy::new(|| Time(Timestamp::UNIX_EPOCH));
-
-    #[test]
-    fn generation_filter_preserves_history_across_metadata_and_uid_changes() {
-        let mut changed = generation_changed();
-        let mut resource = crate::test_support::resource_sync();
-        resource.metadata.generation = Some(1);
-        assert!(changed(&resource));
-        assert!(!changed(&resource));
-
-        resource.metadata.resource_version = Some("2".into());
-        resource.metadata.annotations = Some([("updated".into(), "true".into())].into());
-        resource.status = Some(crate::resources::ResourceSyncStatus::default());
-        assert!(!changed(&resource));
-        resource.metadata.uid = Some("replacement-uid".into());
-        assert!(!changed(&resource));
-
-        resource.metadata.generation = None;
-        assert!(changed(&resource));
-        assert!(changed(&resource));
-        resource.metadata.generation = Some(1);
-        assert!(
-            !changed(&resource),
-            "missing generations do not erase history"
-        );
-        resource.metadata.generation = Some(2);
-        assert!(changed(&resource));
-        assert!(!changed(&resource));
-        resource.metadata.generation = Some(1);
-        assert!(changed(&resource), "any generation change is emitted");
-    }
-
-    #[rstest]
-    #[case::different_name("other", "default")]
-    #[case::different_namespace("copy-config", "other")]
-    fn generation_filter_tracks_names_and_namespaces_independently(
-        #[case] name: &str,
-        #[case] namespace: &str,
-    ) {
-        let mut changed = generation_changed();
-        let mut original = crate::test_support::resource_sync();
-        original.metadata.name = Some("copy-config".into());
-        original.metadata.namespace = Some("default".into());
-        original.metadata.generation = Some(1);
-        let mut other = original.clone();
-        other.metadata.name = Some(name.into());
-        other.metadata.namespace = Some(namespace.into());
-
-        assert!(changed(&original));
-        assert!(changed(&other));
-        assert!(!changed(&original));
-        assert!(!changed(&other));
-    }
 
     #[rstest]
     #[case::no_managed_fields(None, None)]

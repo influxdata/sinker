@@ -3,7 +3,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, 
 use k8s_openapi::jiff::Timestamp;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
-use kube::runtime::{reflector, WatchStreamExt};
+use kube::runtime::{predicates, reflector, PredicateConfig, WatchStreamExt};
 use kube::{
     api::{ListParams, Patch, PatchParams},
     runtime::{
@@ -28,6 +28,7 @@ use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZ
 
 const RESOURCE_SYNC_FAILING_CONDITION: &str = "ResourceSyncFailing";
 const RESOURCE_SYNC_SUCCEEDED_REASON: &str = "ResourceSyncSucceeded";
+const RESOURCE_SYNC_PREDICATE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct Context {
     pub client: Client,
@@ -433,15 +434,14 @@ pub async fn run(client: Client) -> Result<()> {
     }
 
     let (reader, writer) = reflector::store();
-    let mut generation_changed = crate::filters::generation_changed();
     let resource_syncs = watcher(docs, watcher::Config::default().any_semantic())
         .default_backoff()
         .reflect(writer)
         .applied_objects()
-        .filter_map(move |event| {
-            let changed = event.as_ref().map(&mut generation_changed).unwrap_or(true);
-            futures::future::ready(changed.then_some(event))
-        });
+        .predicate_filter(
+            predicates::generation,
+            PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
+        );
 
     let (remote_watcher_manager, remote_objects_trigger) =
         RemoteWatcherManager::new(client.clone());
@@ -489,6 +489,62 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
+
+    #[tokio::test]
+    async fn resource_sync_predicate_accepts_new_uids_and_generation_changes() {
+        use super::RESOURCE_SYNC_PREDICATE_TTL;
+        use futures::{stream, StreamExt};
+        use kube::runtime::{predicates, watcher, PredicateConfig, WatchStreamExt};
+
+        let mut original = sync_fixture();
+        original.metadata.generation = Some(1);
+        let mut metadata_only = original.clone();
+        metadata_only.metadata.resource_version = Some("2".into());
+        metadata_only.status = Some(ResourceSyncStatus::default());
+        let mut recreated = original.clone();
+        recreated.metadata.uid = Some("replacement-uid".into());
+        let mut updated = recreated.clone();
+        updated.metadata.generation = Some(2);
+        let mut missing_generation = updated.clone();
+        missing_generation.metadata.generation = None;
+
+        let mut events = stream::iter([
+            Ok(original.clone()),
+            Ok(metadata_only),
+            Err(watcher::Error::NoResourceVersion),
+            Ok(recreated.clone()),
+            Ok(recreated.clone()),
+            Ok(updated.clone()),
+            Ok(missing_generation.clone()),
+            Ok(missing_generation.clone()),
+        ])
+        .predicate_filter(
+            predicates::generation,
+            PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(
+            events.remove(1),
+            Err(watcher::Error::NoResourceVersion)
+        ));
+        let objects: Vec<_> = events
+            .into_iter()
+            .map(|event| json!(event.expect("object event")))
+            .collect();
+        assert_eq!(
+            objects,
+            [
+                json!(original),
+                json!(recreated),
+                json!(updated),
+                json!(missing_generation),
+                json!(missing_generation)
+            ]
+        );
+    }
 
     fn context(client: kube::Client) -> Arc<Context> {
         let (remote_watcher_manager, _events) = RemoteWatcherManager::new(client.clone());

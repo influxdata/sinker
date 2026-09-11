@@ -316,9 +316,13 @@ of individual syncs or remote clusters. **There is currently no registered `/met
 Prometheus feature does not configure an exporter in [main.rs](src/main.rs).
 
 Reconciliation errors retry after five seconds; object watches reconnect with backoff. A healthy sync waits for events
-rather than polling on a fixed interval. Metadata-only edits to `ResourceSync` and changes to kubeconfig Secrets are not
-explicit reconciliation triggers. Existing watches keep their clients until they reconnect. A retry or subsequent object
-event can pick up updated settings; restart the controller when credential or access changes need to take effect promptly.
+rather than polling on a fixed interval. `ResourceSync` generation filtering tracks name, namespace, and UID, with a
+24-hour cache TTL since the last observation. An event with a new UID or an expired cache entry can trigger reconciliation
+even when its generation is unchanged; cache expiration itself does not schedule reconciliation. Metadata-only edits
+are normally filtered, and kubeconfig Secret changes are not explicit reconciliation triggers.
+
+Existing watches keep their clients until they reconnect. A retry or subsequent object event can pick up updated
+settings; restart the controller when credential or access changes need to take effect promptly.
 
 For failures, check the condition message, referenced object names, resource and Secret namespaces, the Secret's selected
 key and access annotation, RBAC, and connectivity to both API servers. If startup logs say the CRD is not queryable,
