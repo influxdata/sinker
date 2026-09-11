@@ -67,9 +67,9 @@ the latter case, keep the change minimal and explain why it is necessary and whi
   when changing field ownership or event handling.
 - **Watch lifecycle:** [remote_watcher_manager.rs](src/remote_watcher_manager.rs) keys watches by resource reference
   and owning sync, for both local and remote resources. Preserve watcher cancellation and joining during cleanup and
-  shutdown. The main `ResourceSync` stream filters by generation; metadata-only edits and kubeconfig Secret changes
-  are not explicit triggers. Read [event and retry behavior](README.md#status-and-observability) before changing
-  configuration refresh or reconciliation scheduling.
+  shutdown. The main `ResourceSync` stream uses kube's generation predicate with UID-aware caching and a 24-hour idle
+  TTL. Kubeconfig Secret changes are not explicit triggers. Read [event and retry behavior](README.md#status-and-observability)
+  before changing configuration refresh or reconciliation scheduling.
 - **Status:** In [controller.rs](src/controller.rs), compute `ResourceSyncFailing` from live status, not the reflector
   cache. Success clears failure, unchanged condition values retain `lastTransitionTime`, and successful deletion
   cleanup skips the status write because the object may already be gone. Preserve the regression coverage for these
@@ -86,10 +86,9 @@ Follow [Generating CRDs](README.md#generating-crds): generate into a temporary f
 [manifests/crd.yml](manifests/crd.yml). The `manifests` subcommand emits only the two CRDs and needs no cluster connection;
 Kustomize renders the complete deployment bundle.
 
-**Known drift:** the checked-in `ResourceSync.spec` schema contains `self == oldSelf` validation, but the generator in
-[resources.rs](src/resources.rs) omits it. Blind regeneration removes spec immutability and the current CI generation
-check detects this mismatch. Preserve that rule unless changing immutability is part of the task. Report the existing
-drift rather than regenerating tracked artifacts during an unrelated change.
+Preserve schema constraints, defaults, and serialized fields when reviewing generated differences. Establish drift
+from the current generated and checked-in schemas, and report differences outside the task's scope. See
+[ResourceSync](README.md#resourcesync) for the bundled schema's validation behavior.
 
 ## Runtime and deployment changes
 

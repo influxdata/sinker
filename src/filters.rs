@@ -24,37 +24,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-
-    use chrono::TimeZone;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ManagedFieldsEntry, ObjectMeta, Time};
+    use k8s_openapi::jiff::Timestamp;
     use once_cell::sync::Lazy;
-    use rand::distr::Alphanumeric;
-    use rand::Rng;
     use rstest::*;
 
     use super::*;
 
-    macro_rules! rand_string {
-        ($len:expr) => {
-            Lazy::new(|| {
-                iter::repeat(())
-                    .map(|()| rand::rng().sample::<u8, _>(Alphanumeric))
-                    .filter(|c| c.is_ascii_alphabetic())
-                    .take($len)
-                    .map(char::from)
-                    .collect()
-            })
-        };
-        () => {
-            rand_string!(10)
-        };
-    }
-
-    static MANAGER: Lazy<String> = rand_string!();
-    static OTHER_MANAGER: Lazy<String> = rand_string!();
-    static NOW: Lazy<Time> = Lazy::new(|| Time(chrono::Utc::now()));
-    static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
+    static MANAGER: Lazy<String> = Lazy::new(|| "sinker.influxdata.io".into());
+    static OTHER_MANAGER: Lazy<String> = Lazy::new(|| "external-manager".into());
+    static NOW: Lazy<Time> =
+        Lazy::new(|| Time(Timestamp::from_second(1_700_000_000).expect("fixed timestamp")));
+    static EPOCH: Lazy<Time> = Lazy::new(|| Time(Timestamp::UNIX_EPOCH));
 
     #[rstest]
     #[case::no_managed_fields(None, None)]
@@ -142,12 +123,7 @@ mod tests {
         #[case] manager: Option<&str>,
         #[case] expected: Option<bool>,
     ) {
-        let latest = Time(
-            chrono::Utc
-                .timestamp_opt(1_700_000_000, 0)
-                .single()
-                .expect("fixed timestamp"),
-        );
+        let latest = NOW.clone();
         let old = ManagedFieldsEntry {
             manager: Some("sinker.influxdata.io".into()),
             time: Some(EPOCH.clone()),

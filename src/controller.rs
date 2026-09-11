@@ -1,9 +1,9 @@
 use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
-use kube::runtime::{predicates, reflector, WatchStreamExt};
+use kube::runtime::{predicates, reflector, PredicateConfig, WatchStreamExt};
 use kube::{
     api::{ListParams, Patch, PatchParams},
     runtime::{
@@ -28,6 +28,7 @@ use crate::{requeue_after, resources::ResourceSync, util, Error, Result, FINALIZ
 
 const RESOURCE_SYNC_FAILING_CONDITION: &str = "ResourceSyncFailing";
 const RESOURCE_SYNC_SUCCEEDED_REASON: &str = "ResourceSyncSucceeded";
+const RESOURCE_SYNC_PREDICATE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct Context {
     pub client: Client,
@@ -40,6 +41,10 @@ macro_rules! apply_patch_params {
     };
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile_deleted_resource(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -91,6 +96,10 @@ async fn reconcile_deleted_resource(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn stop_watches_and_remove_resource_sync_finalizers(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -118,6 +127,10 @@ async fn stop_watches_and_remove_resource_sync_finalizers(
     Ok(Action::await_change())
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn add_target_finalizer(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -140,6 +153,10 @@ async fn add_target_finalizer(
     requeue_after!(Duration::from_millis(500))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile_normally(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -217,6 +234,10 @@ async fn reconcile_normally(
 
 // TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
     let name = resource_sync
         .metadata
@@ -256,6 +277,10 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     result
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile_helper(
     resource_sync: Arc<ResourceSync>,
     ctx: Arc<Context>,
@@ -299,6 +324,10 @@ async fn reconcile_helper(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn source_and_target_apis(
     resource_sync: &Arc<ResourceSync>,
     ctx: &Arc<Context>,
@@ -370,7 +399,7 @@ fn sync_failing_condition(
 // The transition time is only carried over while the condition value is unchanged; a True<->False
 // flip records a new transition.
 fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>, new_status: &str) -> Time {
-    let now = Time(Utc::now());
+    let now = Time(Timestamp::now());
 
     status
         .as_ref()
@@ -393,6 +422,10 @@ fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Conte
     Action::requeue(Duration::from_secs(5))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 pub async fn run(client: Client) -> Result<()> {
     let docs = Api::<ResourceSync>::all(client.clone());
     if let Err(e) = docs.list(&ListParams::default().limit(1)).await {
@@ -405,7 +438,10 @@ pub async fn run(client: Client) -> Result<()> {
         .default_backoff()
         .reflect(writer)
         .applied_objects()
-        .predicate_filter(predicates::generation);
+        .predicate_filter(
+            predicates::generation,
+            PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
+        );
 
     let (remote_watcher_manager, remote_objects_trigger) =
         RemoteWatcherManager::new(client.clone());
@@ -444,15 +480,71 @@ mod tests {
     };
     use crate::FINALIZER;
     use crate::{Error, Result};
-    use chrono::TimeZone;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::jiff::Timestamp;
     use kube::runtime::controller::Action;
     use once_cell::sync::Lazy;
     use rstest::rstest;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
+
+    #[tokio::test]
+    async fn resource_sync_predicate_accepts_new_uids_and_generation_changes() {
+        use super::RESOURCE_SYNC_PREDICATE_TTL;
+        use futures::{stream, StreamExt};
+        use kube::runtime::{predicates, watcher, PredicateConfig, WatchStreamExt};
+
+        let mut original = sync_fixture();
+        original.metadata.generation = Some(1);
+        let mut metadata_only = original.clone();
+        metadata_only.metadata.resource_version = Some("2".into());
+        metadata_only.status = Some(ResourceSyncStatus::default());
+        let mut recreated = original.clone();
+        recreated.metadata.uid = Some("replacement-uid".into());
+        let mut updated = recreated.clone();
+        updated.metadata.generation = Some(2);
+        let mut missing_generation = updated.clone();
+        missing_generation.metadata.generation = None;
+
+        let mut events = stream::iter([
+            Ok(original.clone()),
+            Ok(metadata_only),
+            Err(watcher::Error::NoResourceVersion),
+            Ok(recreated.clone()),
+            Ok(recreated.clone()),
+            Ok(updated.clone()),
+            Ok(missing_generation.clone()),
+            Ok(missing_generation.clone()),
+        ])
+        .predicate_filter(
+            predicates::generation,
+            PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(
+            events.remove(1),
+            Err(watcher::Error::NoResourceVersion)
+        ));
+        let objects: Vec<_> = events
+            .into_iter()
+            .map(|event| json!(event.expect("object event")))
+            .collect();
+        assert_eq!(
+            objects,
+            [
+                json!(original),
+                json!(recreated),
+                json!(updated),
+                json!(missing_generation),
+                json!(missing_generation)
+            ]
+        );
+    }
 
     fn context(client: kube::Client) -> Arc<Context> {
         let (remote_watcher_manager, _events) = RemoteWatcherManager::new(client.clone());
@@ -748,6 +840,7 @@ mod tests {
     #[case::whole_resource(false, false)]
     #[case::mapped_resource(true, false)]
     #[case::remote_target(false, true)]
+    #[case::mapped_remote_target(true, true)]
     #[tokio::test]
     async fn target_apply_uses_forced_field_manager_and_local_ownership(
         #[case] mapped: bool,
@@ -841,13 +934,13 @@ mod tests {
         live.conditions.as_mut().expect("conditions")[0].type_ = "OtherCondition".into();
         let mut sync = resource_sync(true, None);
         sync.metadata.generation = Some(9);
-        let before = chrono::Utc::now();
+        let before = Timestamp::now();
         let condition = single_condition(reconcile_status(
             &sync,
             &Some(live),
             &Err(Error::NamespaceRequired),
         ));
-        let after = chrono::Utc::now();
+        let after = Timestamp::now();
         assert_eq!(condition.status, "True");
         assert_eq!(condition.observed_generation, Some(9));
         assert_eq!(condition.message, "Namespace is required");
@@ -979,6 +1072,115 @@ mod tests {
         mock.finish(&expected);
     }
 
+    #[tokio::test]
+    async fn invalid_mappings_skip_target_write_and_report_failure() {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        sync.spec.mappings = vec![
+            crate::resources::Mapping {
+                from_field_path: Some("data.key".into()),
+                to_field_path: Some("data.copied".into()),
+            },
+            crate::resources::Mapping::default(),
+            crate::resources::Mapping {
+                from_field_path: Some("invalid[".into()),
+                to_field_path: Some("data.later".into()),
+            },
+        ];
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!({"data": {"key": "value"}})),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+        ]);
+        let ctx = context(mock.client.clone());
+        let error = reconcile(Arc::new(sync), Arc::clone(&ctx)).await;
+        stop_watches(&ctx).await;
+        assert!(matches!(
+            error.expect_err("empty mapping"),
+            Error::MappingEmpty
+        ));
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", SOURCE_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
+        let condition = &requests[4].body()["status"]["conditions"][0];
+        assert_eq!(condition["status"], "True");
+        assert_eq!(condition["reason"], RESOURCE_SYNC_FAILING_CONDITION);
+        assert_eq!(condition["message"], Error::MappingEmpty.to_string());
+    }
+
+    #[rstest]
+    #[case::adding(false)]
+    #[case::removing(true)]
+    #[tokio::test]
+    async fn finalizer_patch_errors_are_returned(#[case] deleting: bool) {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec!["example.com/keep".into()]);
+        if deleting {
+            sync.metadata.deletion_timestamp = Some(EPOCH.clone());
+            sync.metadata
+                .finalizers
+                .as_mut()
+                .expect("finalizers")
+                .push(FINALIZER.into());
+        }
+        let mut responses = vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+        ];
+        let mut expected = vec![("GET", "/api/v1"), ("GET", "/api/v1")];
+        if deleting {
+            responses.push(api_error(404));
+            expected.push(("GET", TARGET_PATH));
+        }
+        responses.push(api_error(409));
+        expected.push(("PATCH", SYNC_PATH));
+        let mock = MockApi::new(responses);
+        let ctx = context(mock.client.clone());
+        let mut cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+        let parent = sync.api(mock.client.clone());
+        let result = reconcile_helper(
+            Arc::new(sync),
+            Arc::clone(&ctx),
+            &"copy-config".into(),
+            &parent,
+        )
+        .await;
+        // Cleanup stops both watches before attempting the finalizer patch, even if it fails.
+        let cancellations_before_cleanup: Vec<_> =
+            std::iter::from_fn(|| cancelled.try_recv().ok()).collect();
+        stop_watches(&ctx).await;
+        let error = result.expect_err("finalizer patch conflict");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 409));
+        assert_eq!(
+            cancellations_before_cleanup.len(),
+            if deleting { 2 } else { 0 }
+        );
+        if deleting {
+            assert_ne!(
+                cancellations_before_cleanup[0].object,
+                cancellations_before_cleanup[1].object
+            );
+        }
+        let requests = mock.finish(&expected);
+        let finalizers = if deleting {
+            json!(["example.com/keep"])
+        } else {
+            json!(["example.com/keep", FINALIZER])
+        };
+        assert_eq!(
+            requests.last().expect("finalizer patch").body(),
+            &json!({"metadata": {"finalizers": finalizers}})
+        );
+    }
+
     #[rstest]
     #[case::status_read(false)]
     #[case::status_write(true)]
@@ -1023,7 +1225,7 @@ mod tests {
         mock.finish(&[]);
     }
 
-    static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
+    static EPOCH: Lazy<Time> = Lazy::new(|| Time(Timestamp::UNIX_EPOCH));
 
     fn status_with_condition(status: &str) -> Option<ResourceSyncStatus> {
         Some(ResourceSyncStatus {
@@ -1051,14 +1253,41 @@ mod tests {
         #[case] new_status: &str,
         #[case] expected: Option<&Time>,
     ) {
-        let before = chrono::Utc::now();
+        let before = Timestamp::now();
         let result = sync_failing_transition_time(&status, new_status);
-        let after = chrono::Utc::now();
+        let after = Timestamp::now();
         if let Some(expected) = expected {
             assert_eq!(&result, expected);
         } else {
             assert!((before..=after).contains(&result.0));
         }
+    }
+
+    #[rstest]
+    #[case::first(0)]
+    #[case::middle(1)]
+    #[case::last(2)]
+    fn transition_time_finds_the_sync_condition_among_other_conditions(#[case] position: usize) {
+        let expected = Time(Timestamp::from_second(1_700_000_000).expect("fixed timestamp"));
+        let mut matching = single_condition(status_with_condition("True"));
+        matching.last_transition_time = expected.clone();
+        let mut unrelated = matching.clone();
+        unrelated.type_ = "Unrelated".into();
+        unrelated.last_transition_time = EPOCH.clone();
+        let mut another = unrelated.clone();
+        another.type_ = "AnotherCondition".into();
+        another.status = "False".into();
+        let mut conditions = vec![unrelated, another];
+        conditions.insert(position, matching);
+        assert_eq!(
+            sync_failing_transition_time(
+                &Some(ResourceSyncStatus {
+                    conditions: Some(conditions)
+                }),
+                "True"
+            ),
+            expected,
+        );
     }
 
     fn resource_sync(deleted: bool, status: Option<ResourceSyncStatus>) -> ResourceSync {

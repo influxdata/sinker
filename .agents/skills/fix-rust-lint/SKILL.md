@@ -46,7 +46,7 @@ a binary and library; run Cargo commands from the repository root. File links in
   allocations, and side effects. For async changes, inspect lock scope, cancellation, task joining, and ordering.
 - Preserve panic behavior deliberately. Do not replace `unwrap`, `expect`, indexing, or panics with fallible behavior
   merely to satisfy a lint; that changes the contract.
-- For API or layout suggestions such as `large_enum_variant`, `large_error_err`, `boxed_local`, `ptr_arg`,
+- For API or layout suggestions such as `large_enum_variant`, `result_large_err`, `boxed_local`, `ptr_arg`,
   `too_many_arguments`, `new_without_default`, derives, or lifetime elision, inspect callers, trait bounds, serde
   behavior, and error handling before accepting the change.
 - For iterator and collection fixes, preserve ordering, duplicates, short-circuiting, mutation, and error accumulation.
@@ -65,8 +65,8 @@ a binary and library; run Cargo commands from the repository root. File links in
 
 - Review any generated, vendored, lockfile, or configuration changes before keeping them. Follow the established
   generator workflow where applicable. For API/schema changes, follow the
-  [CRD comparison instructions](../../../README.md#generating-crds), generating into a temporary file. Preserve the
-  documented spec-immutability rule and report existing drift; do not regenerate tracked CRDs as routine lint cleanup.
+  [CRD comparison instructions](../../../README.md#generating-crds), generating into a temporary file. Preserve schema
+  constraints and report any existing drift; do not regenerate tracked CRDs as routine lint cleanup.
 
 ## Test code
 

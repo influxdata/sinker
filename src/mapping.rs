@@ -21,6 +21,10 @@ fn cleanup_annotations(mut annotations: BTreeMap<String, String>) -> BTreeMap<St
 }
 
 // copies data, annotations and labels from source
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 pub fn clone_resource(
     source: &DynamicObject,
     target_ref: &GVKN,
@@ -37,6 +41,10 @@ pub fn clone_resource(
 }
 
 // copies only fields explicitly selected in the sinks' spec.mappings
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 pub fn apply_mappings(
     source: &DynamicObject,
     target_ref: &GVKN,
@@ -137,6 +145,10 @@ fn convert_metadata(subtree: &serde_json::Value) -> ObjectMeta {
 }
 
 // extract GVKN from a k8s resource in an arbitrary serde_json subtree.
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 fn get_ar_from_subtree(subtree: &serde_json::Value) -> crate::Result<ApiResource> {
     let api_version = subtree["apiVersion"]
         .as_str()
@@ -209,6 +221,10 @@ fn set_field_path(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 fn find_field_path<T>(
     resource: T,
     from_field_path: &Option<String>,
@@ -359,6 +375,10 @@ mod tests {
         assert_eq!(json!(source), original);
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     fn mapped(
         source: serde_json::Value,
         paths: &[(Option<&str>, Option<&str>)],
@@ -439,6 +459,75 @@ mod tests {
         )
         .expect_err("metadata labels must be strings");
         assert!(matches!(error, Error::SerializationError(error) if error.is_data()));
+    }
+
+    #[rstest]
+    #[case::invalid_syntax("items[", false)]
+    #[case::multiple_matches("items[*]", true)]
+    fn source_selection_errors_stop_later_mappings(#[case] path: &str, #[case] multiple: bool) {
+        let error = mapped(
+            json!({"items": ["first", "second"], "value": "copied"}),
+            &[
+                (Some("value"), Some("data.before")),
+                (Some(path), Some("data.selected")),
+                (None, None),
+            ],
+        )
+        .expect_err("source selection fails before the later empty mapping");
+        if multiple {
+            assert!(matches!(error, Error::JsonPathExactlyOneValue(path) if path == "$.items[*]"));
+        } else {
+            assert!(matches!(error, Error::JsonPathError(_)));
+        }
+    }
+
+    #[test]
+    fn malformed_root_replacement_stops_later_mappings() {
+        let error = mapped(
+            json!({"spec": {"apiVersion": "v1"}, "value": "copied"}),
+            &[
+                (Some("value"), Some("data.before")),
+                (Some("spec"), None),
+                (None, None),
+            ],
+        )
+        .expect_err("embedded object needs a kind");
+        assert!(
+            matches!(error, Error::MalformedInnerResource(message) if message.contains("kind"))
+        );
+    }
+
+    #[test]
+    fn metadata_paths_cannot_traverse_an_existing_scalar() {
+        let error = mapped(
+            json!({"value": "copied"}),
+            &[
+                (Some("value"), Some("metadata.labels.app")),
+                (Some("value"), Some("metadata.labels.app.child")),
+                (None, None),
+            ],
+        )
+        .expect_err("label values cannot be traversed");
+        assert!(
+            matches!(error, Error::AddToPathError(AddToPathError::ObjectRequired(value))
+            if value == json!({"name": "target-config", "labels": {"app": "copied"}}))
+        );
+    }
+
+    #[rstest]
+    #[case::omitted(None)]
+    #[case::empty(Some(""))]
+    fn whole_source_mapping_preserves_embedded_identity(#[case] path: Option<&str>) {
+        let source = json!({"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "original", "namespace": "source", "uid": "source-uid"},
+            "data": {"key": "value"}});
+        let target =
+            mapped(source.clone(), &[(path, Some("spec.embedded"))]).expect("embed whole source");
+        assert_eq!(
+            json!(target),
+            json!({"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "target-config"}, "spec": {"embedded": source}})
+        );
     }
 
     #[rstest]

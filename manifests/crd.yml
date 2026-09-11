@@ -5,15 +5,12 @@ metadata:
 spec:
   group: sinker.influxdata.io
   names:
-    categories: []
     kind: ResourceSync
     plural: resourcesyncs
-    shortNames: []
     singular: resourcesync
   scope: Namespaced
   versions:
-  - additionalPrinterColumns: []
-    name: v1alpha1
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Auto-generated derived type for ResourceSyncSpec via `CustomResource`
@@ -37,9 +34,12 @@ spec:
                 properties:
                   cluster:
                     description: |-
-                      A missing clusterRef means "this (local) cluster" and the namespace where resourceRef will be searched in is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets in a namespace they don't have rights to by leveraging sinker.
+                      A missing clusterRef means "this (local) cluster" and the namespace where resourceRef will be searched in
+                      is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets
+                      in a namespace they don't have rights to by leveraging sinker.
 
-                      If a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters. RBAC is still honoured because sinker can only access resources for which the provided token has rights to.
+                      If a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters.
+                      RBAC is still honoured because sinker can only access resources for which the provided token has rights to.
                     nullable: true
                     properties:
                       kubeConfig:
@@ -68,7 +68,10 @@ spec:
                     - kubeConfig
                     type: object
                   resourceRef:
-                    description: This is a reference to a resource that lives in the cluster specified by the sister cluster field. The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the cluster reference.
+                    description: |-
+                      This is a reference to a resource that lives in the cluster specified by the sister cluster field.
+                      The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the
+                      cluster reference.
                     properties:
                       apiVersion:
                         type: string
@@ -88,9 +91,12 @@ spec:
                 properties:
                   cluster:
                     description: |-
-                      A missing clusterRef means "this (local) cluster" and the namespace where resourceRef will be searched in is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets in a namespace they don't have rights to by leveraging sinker.
+                      A missing clusterRef means "this (local) cluster" and the namespace where resourceRef will be searched in
+                      is the namespace of the ResourceSync resource itself. A user cannot thus violate RBAC by referencing secrets
+                      in a namespace they don't have rights to by leveraging sinker.
 
-                      If a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters. RBAC is still honoured because sinker can only access resources for which the provided token has rights to.
+                      If a remote cluster reference is provided, then the namespace is taken from the cluster connection parameters.
+                      RBAC is still honoured because sinker can only access resources for which the provided token has rights to.
                     nullable: true
                     properties:
                       kubeConfig:
@@ -119,7 +125,10 @@ spec:
                     - kubeConfig
                     type: object
                   resourceRef:
-                    description: This is a reference to a resource that lives in the cluster specified by the sister cluster field. The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the cluster reference.
+                    description: |-
+                      This is a reference to a resource that lives in the cluster specified by the sister cluster field.
+                      The resourceRef GVKN doesn't define the namespace explicitly. Instead, the namespace defends on the
+                      cluster reference.
                     properties:
                       apiVersion:
                         type: string
@@ -192,15 +201,12 @@ metadata:
 spec:
   group: sinker.influxdata.io
   names:
-    categories: []
     kind: SinkerContainer
     plural: sinkercontainers
-    shortNames: []
     singular: sinkercontainer
   scope: Namespaced
   versions:
-  - additionalPrinterColumns: []
-    name: v1alpha1
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
         description: This is a handy generic resource container for use as ResourceSync sources or targets
@@ -214,5 +220,4 @@ spec:
         type: object
     served: true
     storage: true
-    subresources: {}
 

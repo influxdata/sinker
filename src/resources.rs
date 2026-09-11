@@ -171,6 +171,7 @@ impl SinkerContainer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kube::CustomResourceExt;
     use rstest::rstest;
 
     #[rstest]
@@ -263,6 +264,19 @@ mod tests {
             assert!(spec.properties.is_none());
             assert!(spec.additional_properties.is_none());
         }
+    }
+
+    #[rstest]
+    #[case::resource_sync(ResourceSync::crd())]
+    #[case::container(SinkerContainer::crd_with_manual_schema())]
+    fn generated_crd_matches_checked_in_contract(#[case] generated: CustomResourceDefinition) {
+        let checked_in = serde_yaml::Deserializer::from_str(include_str!("../manifests/crd.yml"))
+            .map(|document| {
+                CustomResourceDefinition::deserialize(document).expect("checked-in CRD")
+            })
+            .find(|crd| crd.metadata.name == generated.metadata.name)
+            .expect("matching checked-in CRD");
+        assert_eq!(generated, checked_in);
     }
 
     macro_rules! gen_option_flag_tests {

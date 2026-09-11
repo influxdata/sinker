@@ -6,8 +6,8 @@ use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::utils::Backoff;
 use kube::runtime::watcher::DefaultBackoff;
+use kube::Client;
 use kube::Resource;
-use kubert::client::Client;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 use tokio_context::context::Context;
@@ -96,6 +96,10 @@ impl RemoteWatcher {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     async fn start(&self, backoff: &mut DefaultBackoff) -> Result<()> {
         let local_ns = self
             .key
@@ -128,6 +132,10 @@ impl RemoteWatcher {
             .await
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     async fn watch(
         &self,
         api: &NamespacedApi,
@@ -145,6 +153,10 @@ impl RemoteWatcher {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     async fn listen(
         &self,
         api: &NamespacedApi,
@@ -329,14 +341,27 @@ mod tests {
     }
 
     #[rstest]
-    #[case::added("ADDED")]
-    #[case::modified("MODIFIED")]
-    #[case::deleted("DELETED")]
+    #[case::added("ADDED", false)]
+    #[case::modified("MODIFIED", false)]
+    #[case::deleted("DELETED", false)]
+    #[case::added_after_events("ADDED", true)]
+    #[case::modified_after_events("MODIFIED", true)]
+    #[case::deleted_after_events("DELETED", true)]
     #[tokio::test]
-    async fn object_events_require_resource_version(#[case] event: &str) {
+    async fn object_events_require_resource_version(
+        #[case] event: &str,
+        #[case] earlier_events: bool,
+    ) {
+        let mut events = vec![];
+        if earlier_events {
+            events.push(object_event("ADDED", Some("external"), Some("11")));
+            events.push(object_event("MODIFIED", None, Some("12")));
+        }
+        events.push(object_event(event, None, None));
+        events.push(object_event("DELETED", None, Some("14")));
         let mock = MockApi::new(vec![
             discovery_response("ConfigMap", "configmaps", true),
-            watch_response(vec![object_event(event, None, None)]),
+            watch_response(events),
         ]);
         let (watcher, mut receiver) = watcher(mock.client.clone());
         let api = watcher
@@ -355,6 +380,14 @@ mod tests {
             .await
             .expect_err("missing event version");
         assert!(matches!(error, Error::ResourceVersionRequired));
+        if earlier_events {
+            for _ in 0..2 {
+                assert_eq!(
+                    receiver.try_recv().expect("earlier reconcile"),
+                    watcher.key.resource_sync
+                );
+            }
+        }
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
@@ -363,6 +396,99 @@ mod tests {
             ("GET", "/api/v1"),
             ("GET", "/api/v1/namespaces/team-a/configmaps"),
         ]);
+    }
+
+    #[rstest]
+    #[case::empty(vec![], "10", 0)]
+    #[case::mixed(vec![
+        object_event("ADDED", Some("external"), Some("11")),
+        object_event("MODIFIED", Some("sinker.influxdata.io"), Some("12")),
+        object_event("MODIFIED", None, Some("13")),
+        object_event("DELETED", Some("sinker.influxdata.io"), Some("14")),
+        object_event("ADDED", Some("sinker.influxdata.io"), Some("15")),
+        object_event("MODIFIED", Some("external"), Some("16")),
+        object_event("ADDED", None, Some("17")),
+        object_event("DELETED", None, Some("18")),
+        object_event("MODIFIED", Some("sinker.influxdata.io"), Some("19")),
+    ], "19", 6)]
+    #[case::bookmark_after_change(vec![
+        object_event("MODIFIED", None, Some("11")),
+        json!({"type": "BOOKMARK", "object": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"resourceVersion": "20"}}}),
+    ], "20", 1)]
+    #[case::expired_after_change(vec![
+        object_event("MODIFIED", None, Some("11")),
+        json!({"type": "ERROR", "object": {"code": 410, "reason": "Expired", "message": "too old", "status": "Failure"}}),
+    ], "0", 1)]
+    #[tokio::test]
+    async fn watch_sequences_preserve_versions_and_reconcile_counts(
+        #[case] events: Vec<Value>,
+        #[case] expected_version: &str,
+        #[case] expected_reconciles: usize,
+    ) {
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            watch_response(events),
+        ]);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        let api = watcher
+            .key
+            .object
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("API discovery");
+        let version = timeout(
+            Duration::from_secs(2),
+            watcher.listen(
+                &api,
+                "10".into(),
+                &WatchParams::default(),
+                &mut DefaultBackoff::default(),
+            ),
+        )
+        .await
+        .expect("bounded watch stream")
+        .expect("read events");
+        assert_eq!(version, expected_version);
+        for _ in 0..expected_reconciles {
+            assert_eq!(
+                receiver.try_recv().expect("reconcile event"),
+                watcher.key.resource_sync
+            );
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/team-a/configmaps"),
+        ]);
+    }
+
+    #[rstest]
+    #[case::discovery(false)]
+    #[case::initial_get(true)]
+    #[tokio::test]
+    async fn start_propagates_api_errors_before_sending_reconcile(#[case] discovered: bool) {
+        let mut responses = vec![];
+        let mut expected = vec![("GET", "/api/v1")];
+        if discovered {
+            responses.push(discovery_response("ConfigMap", "configmaps", true));
+            expected.push(("GET", "/api/v1/namespaces/team-a/configmaps/source-config"));
+        }
+        responses.push(api_error(403));
+        let mock = MockApi::new(responses);
+        let (watcher, mut receiver) = watcher(mock.client.clone());
+        let error = watcher
+            .start(&mut DefaultBackoff::default())
+            .await
+            .expect_err("API denied");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 403));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        mock.finish(&expected);
     }
 
     #[tokio::test]
