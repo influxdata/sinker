@@ -20,7 +20,7 @@ objects and reapplies the desired target when they change.
   The bundled schema uses CEL validation, and target writes use server-side apply. The repository selects Kubernetes
   1.33 API bindings at build time; this is not a tested minimum cluster version.
 - `kubectl` with Kustomize support.
-- The Rust toolchain selected by [rust-toolchain.toml](rust-toolchain.toml), currently `1.85.0`, when building locally.
+- The Rust toolchain selected by [rust-toolchain.toml](rust-toolchain.toml), currently `1.98.1`, when building locally.
 - An OCI image builder and a registry accessible to the cluster when building your own container image.
 - For remote clusters, network access from the controller and a usable kubeconfig for each connection.
 

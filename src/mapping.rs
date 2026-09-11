@@ -21,6 +21,10 @@ fn cleanup_annotations(mut annotations: BTreeMap<String, String>) -> BTreeMap<St
 }
 
 // copies data, annotations and labels from source
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 pub fn clone_resource(
     source: &DynamicObject,
     target_ref: &GVKN,
@@ -37,6 +41,10 @@ pub fn clone_resource(
 }
 
 // copies only fields explicitly selected in the sinks' spec.mappings
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 pub fn apply_mappings(
     source: &DynamicObject,
     target_ref: &GVKN,
@@ -137,6 +145,10 @@ fn convert_metadata(subtree: &serde_json::Value) -> ObjectMeta {
 }
 
 // extract GVKN from a k8s resource in an arbitrary serde_json subtree.
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 fn get_ar_from_subtree(subtree: &serde_json::Value) -> crate::Result<ApiResource> {
     let api_version = subtree["apiVersion"]
         .as_str()
@@ -209,6 +221,10 @@ fn set_field_path(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 fn find_field_path<T>(
     resource: T,
     from_field_path: &Option<String>,
@@ -359,6 +375,10 @@ mod tests {
         assert_eq!(json!(source), original);
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     fn mapped(
         source: serde_json::Value,
         paths: &[(Option<&str>, Option<&str>)],

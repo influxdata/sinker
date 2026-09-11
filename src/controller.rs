@@ -1,9 +1,9 @@
 use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
-use kube::runtime::{predicates, reflector, WatchStreamExt};
+use kube::runtime::{reflector, WatchStreamExt};
 use kube::{
     api::{ListParams, Patch, PatchParams},
     runtime::{
@@ -40,6 +40,10 @@ macro_rules! apply_patch_params {
     };
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile_deleted_resource(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -91,6 +95,10 @@ async fn reconcile_deleted_resource(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn stop_watches_and_remove_resource_sync_finalizers(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -118,6 +126,10 @@ async fn stop_watches_and_remove_resource_sync_finalizers(
     Ok(Action::await_change())
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn add_target_finalizer(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -140,6 +152,10 @@ async fn add_target_finalizer(
     requeue_after!(Duration::from_millis(500))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile_normally(
     resource_sync: Arc<ResourceSync>,
     name: &str,
@@ -217,6 +233,10 @@ async fn reconcile_normally(
 
 // TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Result<Action> {
     let name = resource_sync
         .metadata
@@ -256,6 +276,10 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     result
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn reconcile_helper(
     resource_sync: Arc<ResourceSync>,
     ctx: Arc<Context>,
@@ -299,6 +323,10 @@ async fn reconcile_helper(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn source_and_target_apis(
     resource_sync: &Arc<ResourceSync>,
     ctx: &Arc<Context>,
@@ -370,7 +398,7 @@ fn sync_failing_condition(
 // The transition time is only carried over while the condition value is unchanged; a True<->False
 // flip records a new transition.
 fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>, new_status: &str) -> Time {
-    let now = Time(Utc::now());
+    let now = Time(Timestamp::now());
 
     status
         .as_ref()
@@ -393,6 +421,10 @@ fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Conte
     Action::requeue(Duration::from_secs(5))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 pub async fn run(client: Client) -> Result<()> {
     let docs = Api::<ResourceSync>::all(client.clone());
     if let Err(e) = docs.list(&ListParams::default().limit(1)).await {
@@ -401,11 +433,15 @@ pub async fn run(client: Client) -> Result<()> {
     }
 
     let (reader, writer) = reflector::store();
+    let mut generation_changed = crate::filters::generation_changed();
     let resource_syncs = watcher(docs, watcher::Config::default().any_semantic())
         .default_backoff()
         .reflect(writer)
         .applied_objects()
-        .predicate_filter(predicates::generation);
+        .filter_map(move |event| {
+            let changed = event.as_ref().map(&mut generation_changed).unwrap_or(true);
+            futures::future::ready(changed.then_some(event))
+        });
 
     let (remote_watcher_manager, remote_objects_trigger) =
         RemoteWatcherManager::new(client.clone());
@@ -444,10 +480,10 @@ mod tests {
     };
     use crate::FINALIZER;
     use crate::{Error, Result};
-    use chrono::TimeZone;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::jiff::Timestamp;
     use kube::runtime::controller::Action;
     use once_cell::sync::Lazy;
     use rstest::rstest;
@@ -841,13 +877,13 @@ mod tests {
         live.conditions.as_mut().expect("conditions")[0].type_ = "OtherCondition".into();
         let mut sync = resource_sync(true, None);
         sync.metadata.generation = Some(9);
-        let before = chrono::Utc::now();
+        let before = Timestamp::now();
         let condition = single_condition(reconcile_status(
             &sync,
             &Some(live),
             &Err(Error::NamespaceRequired),
         ));
-        let after = chrono::Utc::now();
+        let after = Timestamp::now();
         assert_eq!(condition.status, "True");
         assert_eq!(condition.observed_generation, Some(9));
         assert_eq!(condition.message, "Namespace is required");
@@ -1023,7 +1059,7 @@ mod tests {
         mock.finish(&[]);
     }
 
-    static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
+    static EPOCH: Lazy<Time> = Lazy::new(|| Time(Timestamp::UNIX_EPOCH));
 
     fn status_with_condition(status: &str) -> Option<ResourceSyncStatus> {
         Some(ResourceSyncStatus {
@@ -1051,9 +1087,9 @@ mod tests {
         #[case] new_status: &str,
         #[case] expected: Option<&Time>,
     ) {
-        let before = chrono::Utc::now();
+        let before = Timestamp::now();
         let result = sync_failing_transition_time(&status, new_status);
-        let after = chrono::Utc::now();
+        let after = Timestamp::now();
         if let Some(expected) = expected {
             assert_eq!(&result, expected);
         } else {

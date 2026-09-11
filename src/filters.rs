@@ -1,4 +1,20 @@
+use kube::runtime::reflector::ObjectRef;
 use kube::Resource;
+use std::collections::HashMap;
+
+use crate::resources::ResourceSync;
+
+/// Retain generation history by name and namespace for the lifetime of the watch.
+/// Kube's predicate filter now expires entries and keys them by UID as well.
+pub(crate) fn generation_changed() -> impl FnMut(&ResourceSync) -> bool {
+    let mut generations = HashMap::new();
+    move |resource| match resource.metadata.generation {
+        Some(generation) => {
+            generations.insert(ObjectRef::from_obj(resource), generation) != Some(generation)
+        }
+        None => true,
+    }
+}
 
 pub trait Filterable {
     fn was_last_modified_by(&self, manager: &str) -> Option<bool>;
@@ -24,37 +40,70 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-
-    use chrono::TimeZone;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ManagedFieldsEntry, ObjectMeta, Time};
+    use k8s_openapi::jiff::Timestamp;
     use once_cell::sync::Lazy;
-    use rand::distr::Alphanumeric;
-    use rand::Rng;
     use rstest::*;
 
     use super::*;
 
-    macro_rules! rand_string {
-        ($len:expr) => {
-            Lazy::new(|| {
-                iter::repeat(())
-                    .map(|()| rand::rng().sample::<u8, _>(Alphanumeric))
-                    .filter(|c| c.is_ascii_alphabetic())
-                    .take($len)
-                    .map(char::from)
-                    .collect()
-            })
-        };
-        () => {
-            rand_string!(10)
-        };
+    static MANAGER: Lazy<String> = Lazy::new(|| "sinker.influxdata.io".into());
+    static OTHER_MANAGER: Lazy<String> = Lazy::new(|| "external-manager".into());
+    static NOW: Lazy<Time> =
+        Lazy::new(|| Time(Timestamp::from_second(1_700_000_000).expect("fixed timestamp")));
+    static EPOCH: Lazy<Time> = Lazy::new(|| Time(Timestamp::UNIX_EPOCH));
+
+    #[test]
+    fn generation_filter_preserves_history_across_metadata_and_uid_changes() {
+        let mut changed = generation_changed();
+        let mut resource = crate::test_support::resource_sync();
+        resource.metadata.generation = Some(1);
+        assert!(changed(&resource));
+        assert!(!changed(&resource));
+
+        resource.metadata.resource_version = Some("2".into());
+        resource.metadata.annotations = Some([("updated".into(), "true".into())].into());
+        resource.status = Some(crate::resources::ResourceSyncStatus::default());
+        assert!(!changed(&resource));
+        resource.metadata.uid = Some("replacement-uid".into());
+        assert!(!changed(&resource));
+
+        resource.metadata.generation = None;
+        assert!(changed(&resource));
+        assert!(changed(&resource));
+        resource.metadata.generation = Some(1);
+        assert!(
+            !changed(&resource),
+            "missing generations do not erase history"
+        );
+        resource.metadata.generation = Some(2);
+        assert!(changed(&resource));
+        assert!(!changed(&resource));
+        resource.metadata.generation = Some(1);
+        assert!(changed(&resource), "any generation change is emitted");
     }
 
-    static MANAGER: Lazy<String> = rand_string!();
-    static OTHER_MANAGER: Lazy<String> = rand_string!();
-    static NOW: Lazy<Time> = Lazy::new(|| Time(chrono::Utc::now()));
-    static EPOCH: Lazy<Time> = Lazy::new(|| Time(chrono::Utc.timestamp_opt(0, 0).unwrap()));
+    #[rstest]
+    #[case::different_name("other", "default")]
+    #[case::different_namespace("copy-config", "other")]
+    fn generation_filter_tracks_names_and_namespaces_independently(
+        #[case] name: &str,
+        #[case] namespace: &str,
+    ) {
+        let mut changed = generation_changed();
+        let mut original = crate::test_support::resource_sync();
+        original.metadata.name = Some("copy-config".into());
+        original.metadata.namespace = Some("default".into());
+        original.metadata.generation = Some(1);
+        let mut other = original.clone();
+        other.metadata.name = Some(name.into());
+        other.metadata.namespace = Some(namespace.into());
+
+        assert!(changed(&original));
+        assert!(changed(&other));
+        assert!(!changed(&original));
+        assert!(!changed(&other));
+    }
 
     #[rstest]
     #[case::no_managed_fields(None, None)]
@@ -142,12 +191,7 @@ mod tests {
         #[case] manager: Option<&str>,
         #[case] expected: Option<bool>,
     ) {
-        let latest = Time(
-            chrono::Utc
-                .timestamp_opt(1_700_000_000, 0)
-                .single()
-                .expect("fixed timestamp"),
-        );
+        let latest = NOW.clone();
         let old = ManagedFieldsEntry {
             manager: Some("sinker.influxdata.io".into()),
             time: Some(EPOCH.clone()),

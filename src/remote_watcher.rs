@@ -6,8 +6,8 @@ use kube::core::WatchEvent;
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::utils::Backoff;
 use kube::runtime::watcher::DefaultBackoff;
+use kube::Client;
 use kube::Resource;
-use kubert::client::Client;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 use tokio_context::context::Context;
@@ -96,6 +96,10 @@ impl RemoteWatcher {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     async fn start(&self, backoff: &mut DefaultBackoff) -> Result<()> {
         let local_ns = self
             .key
@@ -128,6 +132,10 @@ impl RemoteWatcher {
             .await
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     async fn watch(
         &self,
         api: &NamespacedApi,
@@ -145,6 +153,10 @@ impl RemoteWatcher {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     async fn listen(
         &self,
         api: &NamespacedApi,

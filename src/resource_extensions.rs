@@ -96,6 +96,10 @@ impl Deref for NamespacedApi {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn cluster_client(
     cluster_ref: Option<&ClusterRef>,
     local_ns: &str,
@@ -164,6 +168,10 @@ async fn cluster_client(
     Ok(client)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 fn verify_kubeconfig_secret_access(local_ns: &str, sec: &Secret) -> crate::Result<()> {
     let allowed_namespaces = sec
         .metadata
@@ -181,6 +189,10 @@ fn verify_kubeconfig_secret_access(local_ns: &str, sec: &Secret) -> crate::Resul
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the public Error variants without boxing"
+)]
 async fn api_for(
     cluster_resource_ref: &ClusterResourceRef,
     local_ns: &str,
@@ -212,6 +224,10 @@ async fn api_for(
 }
 
 impl ClusterResourceRef {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the public Error variants without boxing"
+    )]
     pub async fn api_for(&self, client: Client, local_ns: &str) -> crate::Result<NamespacedApi> {
         api_for(self, local_ns, client).await
     }
@@ -223,7 +239,7 @@ mod tests {
     use crate::test_support::{api_error, discovery_response, resource_sync, response, MockApi};
     use futures::future::join_all;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+    use rand::{distr::Alphanumeric, rngs::StdRng, RngExt, SeedableRng};
     use rstest::rstest;
     use serde_json::json;
     use std::collections::BTreeMap;

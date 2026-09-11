@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use kube::runtime::reflector::ObjectRef;
-use kubert::client::Client;
+use kube::Client;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
