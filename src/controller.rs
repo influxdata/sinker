@@ -1282,6 +1282,78 @@ mod tests {
         mock.finish(&[]);
     }
 
+    #[rstest]
+    #[case::status_read("GET")]
+    #[case::status_write("PATCH")]
+    #[tokio::test]
+    async fn metrics_include_pending_status_requests(#[case] blocked_method: &'static str) {
+        let sync = sync_fixture();
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+        ]);
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let (resume, resumed) = tokio::sync::oneshot::channel();
+        let mut gate = Some((started, resumed));
+        let client = mock.client.clone();
+        let service = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            let gate = if request.method() == blocked_method && request.uri().path() == STATUS_PATH
+            {
+                Some(gate.take().expect("one blocked status request"))
+            } else {
+                None
+            };
+            let client = client.clone();
+            async move {
+                if let Some((started, resumed)) = gate {
+                    started.send(()).expect("notify status request");
+                    resumed.await.expect("resume status request");
+                }
+                client.send(request).await
+            }
+        });
+        let ctx = context(kube::Client::new(service, "client-default"));
+        let mut registry = Default::default();
+        let metrics = ControllerMetrics::register(&mut registry);
+        // Keep the future owned here so assertion failures cancel it, rather than
+        // leaving a detached reconciliation task waiting for a response.
+        let mut future = Box::pin(reconcile_with_metrics(Arc::new(sync), ctx, metrics));
+        tokio::select! {
+            result = &mut future => panic!("reconciliation completed before status resumed: {result:?}"),
+            reached = tokio::time::timeout(Duration::from_secs(2), waiting) => {
+                reached.expect("status request starts").expect("status notification");
+            }
+        }
+        let mut text = String::new();
+        prometheus_client::encoding::text::encode(&mut text, &registry).expect("encode metrics");
+        assert!(text.contains("controller_runtime_active_workers{controller=\"resourcesync\"} 1\n"));
+        assert!(text.contains(
+            "controller_runtime_reconcile_time_seconds_count{controller=\"resourcesync\"} 0\n"
+        ));
+        for outcome in ["success", "error", "requeue", "requeue_after"] {
+            assert!(text.contains(&format!(
+                "controller_runtime_reconcile_total{{controller=\"resourcesync\",result=\"{outcome}\"}} 0\n"
+            )));
+        }
+        resume.send(()).expect("release status response");
+        let result = tokio::time::timeout(Duration::from_secs(2), future)
+            .await
+            .expect("reconciliation completes")
+            .expect("successful initialization");
+        assert_eq!(result, Action::requeue(Duration::from_millis(500)));
+        assert_reconcile_metrics(&registry, "requeue_after");
+        mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("PATCH", SYNC_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
+    }
+
     #[tokio::test]
     async fn reconciliation_errors_retry_after_five_seconds() {
         let mock = MockApi::new(vec![]);
