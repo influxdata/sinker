@@ -124,8 +124,6 @@ the source edit to distinguish its effects from existing drift. Carry only inten
 from generated output into the checked-in CRDs; preserve schema constraints, defaults, and serialized fields. Keep
 affected examples accurate when they are included in the requested scope.
 
-The checked-in `ResourceSync.spec` has `self == oldSelf` validation that the generator omits. Preserve that rule and report
-the inherited drift; do not replace the tracked file wholesale or repair generation during an unrelated comment pass.
 `SinkerContainer` uses `crd_with_manual_schema()` to preserve arbitrary `.spec` content, so documentation on its empty
 Rust spec type does not describe the stored payload. Read the manual schema when explaining that API.
 

@@ -86,10 +86,9 @@ Follow [Generating CRDs](README.md#generating-crds): generate into a temporary f
 [manifests/crd.yml](manifests/crd.yml). The `manifests` subcommand emits only the two CRDs and needs no cluster connection;
 Kustomize renders the complete deployment bundle.
 
-**Known drift:** the checked-in `ResourceSync.spec` schema contains `self == oldSelf` validation, but the generator in
-[resources.rs](src/resources.rs) omits it. Blind regeneration removes spec immutability and the current CI generation
-check detects this mismatch. Preserve that rule unless changing immutability is part of the task. Report the existing
-drift rather than regenerating tracked artifacts during an unrelated change.
+Preserve schema constraints, defaults, and serialized fields when reviewing generated differences. Establish drift
+from the current generated and checked-in schemas, and report differences outside the task's scope. See
+[ResourceSync](README.md#resourcesync) for the bundled schema's validation behavior.
 
 ## Runtime and deployment changes
 

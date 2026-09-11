@@ -17,8 +17,8 @@ objects and reapplies the desired target when they change.
 ### Prerequisites
 
 - A Kubernetes cluster for the controller and its CRDs, with permission to install CRDs, RBAC, and a Deployment.
-  The bundled schema uses CEL validation, and target writes use server-side apply. The repository selects Kubernetes
-  1.33 API bindings at build time; this is not a tested minimum cluster version.
+  Target writes use server-side apply. The repository selects Kubernetes 1.33 API bindings at build time;
+  this is not a tested minimum cluster version.
 - `kubectl` with Kustomize support.
 - The Rust toolchain selected by [rust-toolchain.toml](rust-toolchain.toml), currently `1.98.1`, when building locally.
 - An OCI image builder and a registry accessible to the cluster when building your own container image.
@@ -148,9 +148,8 @@ an existing target in place. Deleting the `ResourceSync` initiates [target clean
 | `spec.target.cluster` | No | Target kubeconfig reference and optional resource namespace override. |
 | `spec.mappings` | No | Ordered field mappings. Omitted or `[]` copies the source's content, labels, and annotations. |
 
-**The checked-in CRD makes the entire `spec` immutable**, including mappings. Replace the `ResourceSync` to change its
-spec, accounting for target deletion when removing the old sync. This restriction is enforced by the installed schema;
-the generator currently omits the rule. See [Generating CRDs](#generating-crds) before updating or packaging schemas.
+The bundled CRD does not enforce `spec` immutability. Schema validation is distinct from runtime configuration refresh;
+see [Status and observability](#status-and-observability) for event and retry behavior.
 
 ### Cluster references and namespaces
 
@@ -357,11 +356,10 @@ cargo run --locked -- manifests > /tmp/sinker-crds.yaml
 diff -u manifests/crd.yml /tmp/sinker-crds.yaml
 ```
 
-**Known drift:** [manifests/crd.yml](manifests/crd.yml) includes the `self == oldSelf` validation on `ResourceSync.spec`;
-[resources.rs](src/resources.rs) does not generate it. The comparison currently reports that rule missing. Replacing the
-checked-in file with generated output would remove spec immutability. CI regenerates `manifests/crd.yml` and checks for a
-clean diff, so this mismatch also affects the generation check. Preserve the rule when packaging until its generation is
-reconciled with the manifest.
+CI regenerates [manifests/crd.yml](manifests/crd.yml) and checks for a clean diff. The CRD regression tests in
+[resources.rs](src/resources.rs) also compare generated definitions against the checked-in manifest. Review generated
+differences for changes to schema constraints, defaults, and serialized fields before replacing the manifest. Report
+drift outside the task's scope and keep regeneration within the requested change.
 
 Use `kubectl kustomize manifests` to render the complete deployment bundle.
 

@@ -29,7 +29,7 @@ keep changes within the requested code path.
 
 Use [Cargo.toml](../../../Cargo.toml), [Cargo.lock](../../../Cargo.lock), and
 [rust-toolchain.toml](../../../rust-toolchain.toml) for available dependencies, resolved APIs, and the toolchain.
-Sinker already has `rstest`, `rand`, `once_cell`, and `chrono` as dev-dependencies, and Tokio as a runtime dependency.
+Sinker already has `rstest`, `rand`, and `once_cell` as dev-dependencies, and Tokio as a runtime dependency.
 Prefer standard assertions and existing helpers. Add a dev-dependency or feature only when the requested tests need it;
 the project does not currently include an assertion library or temporary-directory helper.
 
@@ -67,8 +67,9 @@ resolved `rand` API, and generate values that satisfy the intended domain. For e
 produce digits, so it is unsuitable without filtering for a namespace suffix meant to match `[a-z]`. Report the input
 and seed on failure. Fixed seeds make failures reproducible; they do not make invalid fixture generation correct.
 
-Use fixed timestamps for ordering or retained-time assertions. When the code reads the current time internally, bound
-the expected time around the call instead of relying on sleeps or an exact independently sampled timestamp.
+Use fixed timestamps for ordering or retained-time assertions. For Kubernetes timestamps, use
+`k8s_openapi::jiff::Timestamp` as in [filters.rs](../../../src/filters.rs). When the code reads the current time internally,
+bound the expected time around the call instead of relying on sleeps or an exact independently sampled timestamp.
 
 For filesystem behavior, create files and directories under a unique system-temporary directory per case. Arrange
 cleanup even when assertions fail, handle explicit cleanup results, and assert cleanup failures when they are part of
