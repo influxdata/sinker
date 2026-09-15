@@ -1444,7 +1444,7 @@ dependencies = [
  "kubert-prometheus-process",
  "kubert-prometheus-tokio",
  "pin-project-lite",
- "prometheus-client",
+ "prometheus-client 0.23.1",
  "rustls-pemfile",
  "serde",
  "thiserror 2.0.19",
@@ -1464,7 +1464,7 @@ checksum = "5b89e2a641a3f74c2e7366eb050282ac4a6194b63dae5294084215c457237e47"
 dependencies = [
  "libc",
  "procfs",
- "prometheus-client",
+ "prometheus-client 0.23.1",
  "tracing",
 ]
 
@@ -1474,7 +1474,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "639670482534c37eb44caf6f4b72cc5da2f2c06aed39d1fb0cba940569428212"
 dependencies = [
- "prometheus-client",
+ "prometheus-client 0.23.1",
  "tokio",
  "tokio-metrics",
  "tracing",
@@ -1814,7 +1814,19 @@ dependencies = [
  "dtoa",
  "itoa",
  "parking_lot",
- "prometheus-client-derive-encode",
+ "prometheus-client-derive-encode 0.4.2",
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1784dc11a05f5a8f57c4a62915686be140f24f70301290b997e317241fa9ffc2"
+dependencies = [
+ "dtoa",
+ "itoa",
+ "parking_lot",
+ "prometheus-client-derive-encode 0.5.1",
 ]
 
 [[package]]
@@ -1826,6 +1838,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "prometheus-client-derive-encode"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01e34894696ff94f64a20c2c373a6440903e9c2789a303d68ec6e6f953f890e4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2426,7 +2449,7 @@ dependencies = [
  "kube",
  "kubert",
  "once_cell",
- "prometheus-client",
+ "prometheus-client 0.25.1",
  "rand",
  "regex",
  "rstest",
