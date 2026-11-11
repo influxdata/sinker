@@ -299,9 +299,9 @@ Targets configured through a kubeconfig receive no Sinker owner reference, even 
 
 `status.conditions` contains `ResourceSyncFailing`: `"True"` with an error message after failure, or `"False"` with reason
 `ResourceSyncSucceeded` after successful reconciliation. It records `observedGeneration` and preserves `lastTransitionTime`
-while the condition value stays the same, using the live status rather than the watch cache. A successful finalizer-only
-initialization also reports `"False"`, so inspect the target when verifying the first sync. Successful deletion cleanup
-does not write status.
+while the condition value stays the same, using the live status rather than the watch cache. For an active `ResourceSync`,
+reconciliation does not update status until Sinker's finalizer is present. The first subsequent sync attempt sets the
+condition after it succeeds or fails. Successful deletion cleanup does not write status.
 
 ```bash
 kubectl get resourcesyncs -A
@@ -367,7 +367,7 @@ flowchart TD
     M --> T[Server-side apply target]
     T --> W[Watch source and target]
     W -->|External changes, deletion, or watch errors| R
-    R --> ST[Write ResourceSync condition]
+    R -->|Sync attempt or deletion error| ST[Write ResourceSync condition]
     C -->|ResourceSync is deleting| D[Clean up target and remove finalizer]
 ```
 
