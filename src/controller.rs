@@ -269,10 +269,14 @@ async fn reconcile(resource_sync: Arc<ResourceSync>, ctx: Arc<Context>) -> Resul
     )
     .await;
 
-    // Always write the status, and compute it from the live object rather than the reflector
-    // cache. The cache can lag our own previous patch: deciding off it can skip the write and
-    // leave the condition latched, and carrying its stale condition over corrupts
-    // lastTransitionTime. Skip the get when we won't write; the object may already be gone.
+    // An active sync without our finalizer is still initializing; leave status untouched.
+    if !resource_sync.has_been_deleted() && !resource_sync.has_target_finalizer() {
+        return result;
+    }
+
+    // Compute status from the live object rather than the reflector cache. The cache can lag our
+    // previous patch, leaving the condition latched or corrupting lastTransitionTime. Skip the
+    // get when we won't write; a deleted object may already be gone.
     let live_status = if result.is_err() || !resource_sync.has_been_deleted() {
         parent_api.get_status(&name).await?.status
     } else {
@@ -627,18 +631,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialization_preserves_finalizers_and_writes_live_success_status() {
+    async fn initialization_preserves_finalizers_without_writing_status() {
         let mut sync = sync_fixture();
         sync.metadata.finalizers = Some(vec!["example.com/other".into()]);
         sync.status = status_with_condition("True");
-        let mut live = sync.clone();
-        live.status = status_with_condition("False");
         let mock = MockApi::new(vec![
             discovery_response("ConfigMap", "configmaps", true),
             discovery_response("ConfigMap", "configmaps", true),
             response(200, json!(sync)),
-            response(200, json!(live)),
-            response(200, json!(live)),
         ]);
         let mut registry = Default::default();
         let metrics = ControllerMetrics::register(&mut registry);
@@ -647,13 +647,7 @@ mod tests {
             .expect("initialize sync");
         assert_eq!(result, Action::requeue(Duration::from_millis(500)));
         assert_reconcile_metrics(&registry, "requeue_after");
-        let requests = mock.finish(&[
-            ("GET", "/api/v1"),
-            ("GET", "/api/v1"),
-            ("PATCH", SYNC_PATH),
-            ("GET", STATUS_PATH),
-            ("PATCH", STATUS_PATH),
-        ]);
+        let requests = mock.finish(&[("GET", "/api/v1"), ("GET", "/api/v1"), ("PATCH", SYNC_PATH)]);
         assert_eq!(
             requests[2].body(),
             &json!({"metadata": {"finalizers": ["example.com/other", FINALIZER]}})
@@ -662,13 +656,21 @@ mod tests {
             requests[2].headers()["content-type"],
             "application/merge-patch+json"
         );
-        let status: ResourceSyncStatus =
-            serde_json::from_value(requests[4].body()["status"].clone()).expect("status patch");
-        let condition = single_condition(Some(status));
-        assert_eq!(condition.last_transition_time, *EPOCH);
-        assert_eq!(condition.observed_generation, Some(7));
-        assert_eq!(condition.status, "False");
-        assert_eq!(condition.message, "Sync succeeded");
+    }
+
+    #[tokio::test]
+    async fn failed_finalizer_initialization_does_not_write_status() {
+        let sync = sync_fixture();
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            api_error(409),
+        ]);
+        let error = reconcile(Arc::new(sync), context(mock.client.clone()))
+            .await
+            .expect_err("finalizer patch conflict");
+        assert!(matches!(error, Error::KubeError(kube::Error::Api(error)) if error.code == 409));
+        mock.finish(&[("GET", "/api/v1"), ("GET", "/api/v1"), ("PATCH", SYNC_PATH)]);
     }
 
     #[tokio::test]
@@ -743,6 +745,45 @@ mod tests {
         assert_eq!(condition["message"], message);
         assert_eq!(condition["observedGeneration"], 7);
         assert_eq!(condition["lastTransitionTime"], json!(*EPOCH));
+    }
+
+    #[tokio::test]
+    async fn first_sync_attempt_writes_success_status() {
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        sync.status = status_with_condition("True");
+        let source = json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "source-config"}, "data": {"key": "value"}});
+        let mock = MockApi::new(vec![
+            discovery_response("ConfigMap", "configmaps", true),
+            discovery_response("ConfigMap", "configmaps", true),
+            response(200, source.clone()),
+            response(200, source),
+            response(200, json!(sync)),
+            response(200, json!(sync)),
+        ]);
+        let ctx = context(mock.client.clone());
+        let _cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+        let result = reconcile(Arc::new(sync), Arc::clone(&ctx)).await;
+        stop_watches(&ctx).await;
+        assert_eq!(result.expect("first sync succeeds"), Action::await_change());
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", SOURCE_PATH),
+            ("PATCH", TARGET_PATH),
+            ("GET", STATUS_PATH),
+            ("PATCH", STATUS_PATH),
+        ]);
+        let status: ResourceSyncStatus =
+            serde_json::from_value(requests[5].body()["status"].clone()).expect("status patch");
+        let condition = single_condition(Some(status));
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, RESOURCE_SYNC_SUCCEEDED_REASON);
+        assert_eq!(condition.message, "Sync succeeded");
+        assert_eq!(condition.observed_generation, Some(7));
+        assert_ne!(condition.last_transition_time, *EPOCH);
     }
 
     #[rstest]
@@ -1251,16 +1292,17 @@ mod tests {
     #[case::status_write(true)]
     #[tokio::test]
     async fn status_api_errors_are_returned(#[case] write: bool) {
-        let sync = sync_fixture();
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
         let mut responses = vec![
             discovery_response("ConfigMap", "configmaps", true),
             discovery_response("ConfigMap", "configmaps", true),
-            response(200, json!(sync)),
+            api_error(404),
         ];
         let mut expected = vec![
             ("GET", "/api/v1"),
             ("GET", "/api/v1"),
-            ("PATCH", SYNC_PATH),
+            ("GET", SOURCE_PATH),
             ("GET", STATUS_PATH),
         ];
         if write {
@@ -1299,18 +1341,19 @@ mod tests {
     #[case::status_write("PATCH")]
     #[tokio::test]
     async fn metrics_include_pending_status_requests(#[case] blocked_method: &'static str) {
-        let sync = sync_fixture();
+        let mut sync = sync_fixture();
+        sync.metadata.finalizers = Some(vec![FINALIZER.into()]);
         let mock = MockApi::new(vec![
             discovery_response("ConfigMap", "configmaps", true),
             discovery_response("ConfigMap", "configmaps", true),
-            response(200, json!(sync)),
+            api_error(404),
             response(200, json!(sync)),
             response(200, json!(sync)),
         ]);
         let (started, waiting) = tokio::sync::oneshot::channel();
         let (resume, resumed) = tokio::sync::oneshot::channel();
-        // Pause only the chosen status operation after initialization has run,
-        // so the assertions below prove the outer attempt still owns a worker.
+        // Pause only the chosen status operation so the assertions below prove
+        // the outer attempt still owns a worker.
         let mut gate = Some((started, resumed));
         let client = mock.client.clone();
         let service = tower::service_fn(move |request: http::Request<kube::client::Body>| {
@@ -1353,16 +1396,16 @@ mod tests {
             )));
         }
         resume.send(()).expect("release status response");
-        let result = tokio::time::timeout(Duration::from_secs(2), future)
+        let error = tokio::time::timeout(Duration::from_secs(2), future)
             .await
             .expect("reconciliation completes")
-            .expect("successful initialization");
-        assert_eq!(result, Action::requeue(Duration::from_millis(500)));
-        assert_reconcile_metrics(&registry, "requeue_after");
+            .expect_err("source absent");
+        assert!(matches!(error, Error::ResourceNotFoundError(..)));
+        assert_reconcile_metrics(&registry, "error");
         mock.finish(&[
             ("GET", "/api/v1"),
             ("GET", "/api/v1"),
-            ("PATCH", SYNC_PATH),
+            ("GET", SOURCE_PATH),
             ("GET", STATUS_PATH),
             ("PATCH", STATUS_PATH),
         ]);
