@@ -195,10 +195,13 @@ async fn reconcile_normally(
             )?
         };
 
-        // If the target is local then add an owner reference to it
+        // If the target is local and namespace-scoped then add an owner reference to it
         match resource_sync.spec.target.cluster.to_owned() {
-            Some(_) => target,
-            None => {
+            None if target_api
+                .namespace
+                .as_ref()
+                .eq(&resource_sync.metadata.namespace.as_ref()) =>
+            {
                 target.owner_references_mut().push(OwnerReference {
                     api_version: ResourceSync::api_version(&()).to_string(),
                     kind: ResourceSync::kind(&()).to_string(),
@@ -214,6 +217,7 @@ async fn reconcile_normally(
 
                 target
             }
+            _ => target,
         }
     };
 
