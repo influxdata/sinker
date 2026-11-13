@@ -47,9 +47,6 @@ macro_rules! rv_for {
     };
 }
 
-// TODO: There may be some other error types that should not be triggering reconciles
-// TODO: Could also process mappings to ignore changes to fields that we don't care about, but it's far more complex for a lot less benefit
-
 impl RemoteWatcher {
     pub fn new(
         key: RemoteWatcherKey,

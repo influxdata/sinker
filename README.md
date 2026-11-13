@@ -176,7 +176,7 @@ The two namespace fields have different meanings:
 | `cluster.namespace` | Namespace of the source/target in the **referenced cluster**. | Selected kubeconfig context's namespace, or `default`. |
 
 Discovery determines whether a kind is namespaced or cluster-scoped. Cluster-scoped API requests use no resource
-namespace; see the [local target ownership limitation](#annotations-and-finalizers) before using such a target.
+namespace; see [target ownership and deletion](#annotations-and-finalizers) when using such a target.
 
 Create the kubeconfig Secret in an existing namespace. This example authorizes syncs in `default` to use credentials
 stored in `cluster-credentials`:
@@ -282,17 +282,25 @@ These annotations belong to the **ResourceSync** and are enabled only by the str
 
 | Annotation | Effect |
 | --- | --- |
-| `sinker.influxdata.io/disable-target-deletion: "true"` | Skip Sinker issuing the target delete request, stop watches, and remove Sinker's finalizer. |
+| `sinker.influxdata.io/disable-target-deletion: "true"` | Skip Sinker's target delete request and owner reference, stop watches, and remove Sinker's finalizer. The owner-reference change applies when Sinker next applies a local namespaced target. |
 | `sinker.influxdata.io/force-delete: "true"` | During deletion, remove Sinker's finalizer if constructing either source or target API fails, for example because credentials or a remote API are unavailable. It does not bypass errors from subsequent target GET/DELETE requests or a target's finalizers. |
 
 Both source and target APIs are resolved before normal cleanup, even with `disable-target-deletion`. An unavailable
 source cluster can therefore block cleanup too. Force deletion can leave a target behind for manual cleanup.
 
-Local targets (`target.cluster` omitted) also receive an owner reference to the namespaced `ResourceSync`.
-**Disabling target deletion alone does not retain a local target**: Kubernetes garbage collection can still delete it.
-Retention must also account for Kubernetes [orphaning behavior](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#orphaned-dependents).
-The controller currently adds this owner reference even to a local cluster-scoped target, which conflicts with Kubernetes
+Local namespaced targets (`target.cluster` omitted) receive an owner reference to the `ResourceSync` in the same namespace
+unless `sinker.influxdata.io/disable-target-deletion` is `"true"` when Sinker applies the target. Set it before creating the sync
+to have Sinker skip both the delete request and its owner reference. Enabling it on an active sync triggers
+reconciliation. On a successful server-side apply, omitting Sinker's previously managed owner reference removes it if
+no other field manager also owns that entry; see Kubernetes [field management](https://kubernetes.io/docs/reference/using-api/server-side-apply/#field-management).
+Verify the target's `metadata.ownerReferences` before deleting the sync if reconciliation fails or the sync is already
+deleting, since deletion skips the normal target apply.
+Existing owner references from other controllers also affect retention; see Kubernetes
+[orphaning behavior](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#orphaned-dependents).
+Local cluster-scoped targets receive no Sinker owner reference, following Kubernetes
 [owner scope rules](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#owners-and-dependents).
+For those targets, `disable-target-deletion` skips Sinker's delete request without a Sinker owner reference triggering
+garbage collection.
 Targets configured through a kubeconfig receive no Sinker owner reference, even if that kubeconfig points at the local cluster.
 
 ## Status and observability
@@ -342,10 +350,11 @@ select that backend as the dashboard's Prometheus datasource. Metric labels iden
 source or target resource's namespace or cluster.
 
 Reconciliation errors retry after five seconds; object watches reconnect with backoff. A healthy sync waits for events
-rather than polling on a fixed interval. `ResourceSync` generation filtering tracks name, namespace, and UID, with a
-24-hour cache TTL since the last observation. An event with a new UID or an expired cache entry can trigger reconciliation
-even when its generation is unchanged; cache expiration itself does not schedule reconciliation. Metadata-only edits
-are normally filtered, and kubeconfig Secret changes are not explicit reconciliation triggers.
+rather than polling on a fixed interval. The `ResourceSync` filter tracks generation, deletion state,
+`disable-target-deletion`, and `force-delete`, with a cache keyed by name, namespace, and UID and a 24-hour idle TTL.
+Changes to either annotation's effective Boolean value trigger reconciliation even if the generation is unchanged.
+Status writes and unrelated metadata-only edits are filtered. A new UID or expired cache entry can also trigger reconciliation; cache expiration
+itself does not schedule it. Events with no generation are forwarded. Kubeconfig Secret changes are not explicit triggers.
 
 Existing watches keep their clients until they reconnect. A retry or subsequent object event can pick up updated
 settings; restart the controller when credential or access changes need to take effect promptly.
@@ -371,8 +380,8 @@ flowchart TD
     C -->|ResourceSync is deleting| D[Clean up target and remove finalizer]
 ```
 
-The controller filters `ResourceSync` events by generation to avoid loops from its own status writes. The watcher manager
-keeps a watcher per resource reference and owning sync, for local and remote endpoints. Object watches use
+The controller filters `ResourceSync` events by reconciliation-relevant fields to avoid loops from its own status writes.
+The watcher manager keeps a watcher per resource reference and owning sync, for local and remote endpoints. Object watches use
 `metadata.name` selectors and managed-field timestamps to suppress changes last attributed to `sinker.influxdata.io`;
 events with unknown ownership trigger reconciliation. Shutdown cancels and joins the watchers.
 

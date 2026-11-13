@@ -3,7 +3,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, 
 use k8s_openapi::jiff::Timestamp;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
-use kube::runtime::{predicates, reflector, PredicateConfig, WatchStreamExt};
+use kube::runtime::{reflector, PredicateConfig, WatchStreamExt};
 use kube::{
     api::{ListParams, Patch, PatchParams},
     runtime::{
@@ -13,6 +13,7 @@ use kube::{
     Api, Client, Resource, ResourceExt,
 };
 use serde_json::json;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::string::ToString;
 use std::{sync::Arc, time::Duration};
 #[allow(unused_imports)]
@@ -195,26 +196,31 @@ async fn reconcile_normally(
             )?
         };
 
-        // If the target is local then add an owner reference to it
-        match resource_sync.spec.target.cluster.to_owned() {
-            Some(_) => target,
-            None => {
-                target.owner_references_mut().push(OwnerReference {
-                    api_version: ResourceSync::api_version(&()).to_string(),
-                    kind: ResourceSync::kind(&()).to_string(),
-                    name: name.to_owned(),
-                    uid: resource_sync
-                        .metadata
-                        .uid
-                        .to_owned()
-                        .ok_or(Error::UIDRequired)?,
-                    controller: Some(false),
-                    block_owner_deletion: Some(true),
-                });
-
-                target
-            }
+        // Owner-based garbage collection must not override disable-target-deletion.
+        // A namespaced ResourceSync can own only a local target in its namespace;
+        // cluster-scoped and kubeconfig targets do not receive this reference.
+        if resource_sync.spec.target.cluster.is_none()
+            && !resource_sync.has_disable_target_deletion_option_enabled()
+            && target_api
+                .namespace
+                .as_ref()
+                .eq(&resource_sync.metadata.namespace.as_ref())
+        {
+            target.owner_references_mut().push(OwnerReference {
+                api_version: ResourceSync::api_version(&()).to_string(),
+                kind: ResourceSync::kind(&()).to_string(),
+                name: name.to_owned(),
+                uid: resource_sync
+                    .metadata
+                    .uid
+                    .to_owned()
+                    .ok_or(Error::UIDRequired)?,
+                controller: Some(false),
+                block_owner_deletion: Some(true),
+            });
         }
+
+        target
     };
 
     debug!(?target, "produced target object");
@@ -232,8 +238,6 @@ async fn reconcile_normally(
 
     Ok(Action::await_change())
 }
-
-// TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
 
 #[expect(
     clippy::result_large_err,
@@ -437,7 +441,6 @@ fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>, new_status:
 fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Context>) -> Action {
     let name = resource_sync.name_any();
     warn!(?name, %error, "reconcile failed");
-    // TODO(mkm): make error requeue duration configurable
     Action::requeue(Duration::from_secs(5))
 }
 
@@ -478,7 +481,7 @@ pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Res
         .reflect(writer)
         .applied_objects()
         .predicate_filter(
-            predicates::generation,
+            resource_sync_predicate,
             PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
         );
 
@@ -509,11 +512,38 @@ pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Res
     Ok(())
 }
 
+#[derive(Hash)]
+struct ResourceSyncPredicateFields {
+    generation: i64,
+    deleting: bool,
+    disable_target_deletion: bool,
+    force_delete: bool,
+}
+
+/// Return a watch-cache hash of generation and metadata that affects reconciliation.
+///
+/// The hash is for equality checks within the watch cache, not a persistent identifier.
+/// A missing generation returns `None` so the filter forwards every such event.
+pub fn resource_sync_predicate(obj: &ResourceSync) -> Option<u64> {
+    let fields = ResourceSyncPredicateFields {
+        generation: obj.meta().generation?,
+        deleting: obj.has_been_deleted(),
+        disable_target_deletion: obj.has_disable_target_deletion_option_enabled(),
+        force_delete: obj.has_force_delete_option_enabled(),
+    };
+
+    let mut hasher = DefaultHasher::new();
+    fields.hash(&mut hasher);
+
+    Some(hasher.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         reconcile, reconcile_deleted_resource, reconcile_helper, reconcile_normally,
-        reconcile_with_metrics, Context, ControllerMetrics, RemoteWatcherManager,
+        reconcile_with_metrics, resource_sync_predicate, Context, ControllerMetrics,
+        RemoteWatcherManager,
     };
     use super::{
         reconcile_status, sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION,
@@ -536,16 +566,33 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
-    async fn resource_sync_predicate_accepts_new_uids_and_generation_changes() {
+    async fn resource_sync_predicate_tracks_reconciliation_relevant_changes() {
         use super::RESOURCE_SYNC_PREDICATE_TTL;
         use futures::{stream, StreamExt};
-        use kube::runtime::{predicates, watcher, PredicateConfig, WatchStreamExt};
+        use kube::runtime::{watcher, PredicateConfig, WatchStreamExt};
 
         let mut original = sync_fixture();
         original.metadata.generation = Some(1);
         let mut metadata_only = original.clone();
         metadata_only.metadata.resource_version = Some("2".into());
         metadata_only.status = Some(ResourceSyncStatus::default());
+        let mut deletion_disabled = metadata_only.clone();
+        deletion_disabled.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            crate::resources::DISABLE_TARGET_DELETION_ANNOTATION.into(),
+            "true".into(),
+        )]));
+        let mut force_delete = deletion_disabled.clone();
+        force_delete
+            .metadata
+            .annotations
+            .as_mut()
+            .expect("annotation map")
+            .insert(
+                crate::resources::FORCE_DELETE_ANNOTATION.into(),
+                "true".into(),
+            );
+        let mut deleting = force_delete.clone();
+        deleting.metadata.deletion_timestamp = Some(EPOCH.clone());
         let mut recreated = original.clone();
         recreated.metadata.uid = Some("replacement-uid".into());
         let mut updated = recreated.clone();
@@ -557,6 +604,9 @@ mod tests {
             Ok(original.clone()),
             Ok(metadata_only),
             Err(watcher::Error::NoResourceVersion),
+            Ok(deletion_disabled.clone()),
+            Ok(force_delete.clone()),
+            Ok(deleting.clone()),
             Ok(recreated.clone()),
             Ok(recreated.clone()),
             Ok(updated.clone()),
@@ -564,13 +614,13 @@ mod tests {
             Ok(missing_generation.clone()),
         ])
         .predicate_filter(
-            predicates::generation,
+            resource_sync_predicate,
             PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
         )
         .collect::<Vec<_>>()
         .await;
 
-        assert_eq!(events.len(), 6);
+        assert_eq!(events.len(), 9);
         assert!(matches!(
             events.remove(1),
             Err(watcher::Error::NoResourceVersion)
@@ -583,11 +633,39 @@ mod tests {
             objects,
             [
                 json!(original),
+                json!(deletion_disabled),
+                json!(force_delete),
+                json!(deleting),
                 json!(recreated),
                 json!(updated),
                 json!(missing_generation),
                 json!(missing_generation)
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::local_disable(false, crate::resources::DISABLE_TARGET_DELETION_ANNOTATION)]
+    #[case::remote_disable(true, crate::resources::DISABLE_TARGET_DELETION_ANNOTATION)]
+    #[case::local_force(false, crate::resources::FORCE_DELETE_ANNOTATION)]
+    #[case::remote_force(true, crate::resources::FORCE_DELETE_ANNOTATION)]
+    fn resource_sync_predicate_tracks_deletion_annotations_for_both_target_scopes(
+        #[case] remote: bool,
+        #[case] annotation: &str,
+    ) {
+        let mut before = sync_fixture();
+        if remote {
+            before.spec.target.cluster = Some(Default::default());
+        }
+        let mut after = before.clone();
+        after.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            annotation.into(),
+            "true".into(),
+        )]));
+
+        assert_ne!(
+            resource_sync_predicate(&before),
+            resource_sync_predicate(&after)
         );
     }
 
@@ -943,16 +1021,30 @@ mod tests {
     }
 
     #[rstest]
-    #[case::whole_resource(false, false)]
-    #[case::mapped_resource(true, false)]
-    #[case::remote_target(false, true)]
-    #[case::mapped_remote_target(true, true)]
+    #[case::whole_resource(false, false, false, true)]
+    #[case::mapped_resource(true, false, false, true)]
+    #[case::remote_target(false, true, false, true)]
+    #[case::mapped_remote_target(true, true, false, true)]
+    #[case::local_deletion_disabled(false, false, true, true)]
+    #[case::mapped_local_deletion_disabled_without_uid(true, false, true, false)]
+    #[case::remote_deletion_disabled_without_uid(false, true, true, false)]
     #[tokio::test]
-    async fn target_apply_uses_forced_field_manager_and_local_ownership(
+    async fn target_apply_uses_forced_field_manager_and_conditional_ownership(
         #[case] mapped: bool,
         #[case] remote: bool,
+        #[case] deletion_disabled: bool,
+        #[case] uid_present: bool,
     ) {
         let mut sync = sync_fixture();
+        if deletion_disabled {
+            sync.metadata.annotations = Some(std::collections::BTreeMap::from([(
+                crate::resources::DISABLE_TARGET_DELETION_ANNOTATION.into(),
+                "true".into(),
+            )]));
+        }
+        if !uid_present {
+            sync.metadata.uid = None;
+        }
         if mapped {
             sync.spec.mappings = vec![crate::resources::Mapping {
                 from_field_path: Some("data.original".into()),
@@ -1022,7 +1114,7 @@ mod tests {
                 json!({"original": "value"})
             }
         );
-        if remote {
+        if remote || deletion_disabled {
             assert!(patch.body()["metadata"].get("ownerReferences").is_none());
         } else {
             assert_eq!(
@@ -1032,6 +1124,76 @@ mod tests {
                 "uid": "sync-uid", "controller": false, "blockOwnerDeletion": true}])
             );
         }
+    }
+
+    #[rstest]
+    #[case::with_uid(Some("sync-uid"))]
+    #[case::without_uid(None)]
+    #[tokio::test]
+    async fn local_cluster_scoped_target_has_no_owner_reference(#[case] uid: Option<&str>) {
+        let mut sync = sync_fixture();
+        sync.spec.source.resource_ref.kind = "Namespace".into();
+        sync.spec.target.resource_ref.kind = "Namespace".into();
+        sync.metadata.uid = uid.map(str::to_string);
+        let source = json!({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+                "name": "source-config",
+                "labels": {"example.com/source": "yes"}
+            }
+        });
+        let mock = MockApi::new(vec![
+            discovery_response("Namespace", "namespaces", false),
+            discovery_response("Namespace", "namespaces", false),
+            response(200, source.clone()),
+            response(200, source),
+        ]);
+        let source_api = sync
+            .spec
+            .source
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("source API");
+        let target_api = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        assert_eq!(target_api.namespace, None);
+        let ctx = context(mock.client.clone());
+        let _cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+
+        let result = reconcile_normally(
+            Arc::new(sync),
+            "copy-config",
+            source_api,
+            target_api,
+            Arc::clone(&ctx),
+        )
+        .await;
+        stop_watches(&ctx).await;
+        assert_eq!(
+            result.expect("apply cluster-scoped target"),
+            Action::await_change()
+        );
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/source-config"),
+            ("PATCH", "/api/v1/namespaces/target-config"),
+        ]);
+        let patch = &requests[3];
+        assert_eq!(patch.body()["metadata"]["name"], "target-config");
+        assert!(patch.body()["metadata"].get("namespace").is_none());
+        assert!(patch.body()["metadata"].get("ownerReferences").is_none());
+        assert_eq!(
+            patch.body()["metadata"]["labels"],
+            json!({"example.com/source": "yes"})
+        );
     }
 
     #[test]
