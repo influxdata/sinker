@@ -513,22 +513,27 @@ pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Res
 }
 
 #[derive(Hash)]
-struct ResourceSyncHashContainer {
-    generation: Option<i64>,
-    force_delete: Option<bool>,
+struct ResourceSyncPredicateFields {
+    generation: i64,
+    deleting: bool,
+    disable_target_deletion: bool,
+    force_delete: bool,
 }
 
+/// Return a watch-cache hash of generation and metadata that affects reconciliation.
+///
+/// The hash is for equality checks within the watch cache, not a persistent identifier.
+/// A missing generation returns `None` so the filter forwards every such event.
 pub fn resource_sync_predicate(obj: &ResourceSync) -> Option<u64> {
-    let container = ResourceSyncHashContainer {
-        generation: obj.meta().generation,
-        force_delete: match obj.spec.target.cluster {
-            None => Some(obj.has_force_delete_option_enabled()),
-            Some(_) => None,
-        },
+    let fields = ResourceSyncPredicateFields {
+        generation: obj.meta().generation?,
+        deleting: obj.has_been_deleted(),
+        disable_target_deletion: obj.has_disable_target_deletion_option_enabled(),
+        force_delete: obj.has_force_delete_option_enabled(),
     };
 
     let mut hasher = DefaultHasher::new();
-    container.hash(&mut hasher);
+    fields.hash(&mut hasher);
 
     Some(hasher.finish())
 }
@@ -537,7 +542,8 @@ pub fn resource_sync_predicate(obj: &ResourceSync) -> Option<u64> {
 mod tests {
     use super::{
         reconcile, reconcile_deleted_resource, reconcile_helper, reconcile_normally,
-        reconcile_with_metrics, Context, ControllerMetrics, RemoteWatcherManager,
+        reconcile_with_metrics, resource_sync_predicate, Context, ControllerMetrics,
+        RemoteWatcherManager,
     };
     use super::{
         reconcile_status, sync_failing_transition_time, RESOURCE_SYNC_FAILING_CONDITION,
@@ -560,16 +566,33 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
-    async fn resource_sync_predicate_accepts_new_uids_and_generation_changes() {
+    async fn resource_sync_predicate_tracks_reconciliation_relevant_changes() {
         use super::RESOURCE_SYNC_PREDICATE_TTL;
         use futures::{stream, StreamExt};
-        use kube::runtime::{predicates, watcher, PredicateConfig, WatchStreamExt};
+        use kube::runtime::{watcher, PredicateConfig, WatchStreamExt};
 
         let mut original = sync_fixture();
         original.metadata.generation = Some(1);
         let mut metadata_only = original.clone();
         metadata_only.metadata.resource_version = Some("2".into());
         metadata_only.status = Some(ResourceSyncStatus::default());
+        let mut deletion_disabled = metadata_only.clone();
+        deletion_disabled.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            crate::resources::DISABLE_TARGET_DELETION_ANNOTATION.into(),
+            "true".into(),
+        )]));
+        let mut force_delete = deletion_disabled.clone();
+        force_delete
+            .metadata
+            .annotations
+            .as_mut()
+            .expect("annotation map")
+            .insert(
+                crate::resources::FORCE_DELETE_ANNOTATION.into(),
+                "true".into(),
+            );
+        let mut deleting = force_delete.clone();
+        deleting.metadata.deletion_timestamp = Some(EPOCH.clone());
         let mut recreated = original.clone();
         recreated.metadata.uid = Some("replacement-uid".into());
         let mut updated = recreated.clone();
@@ -581,6 +604,9 @@ mod tests {
             Ok(original.clone()),
             Ok(metadata_only),
             Err(watcher::Error::NoResourceVersion),
+            Ok(deletion_disabled.clone()),
+            Ok(force_delete.clone()),
+            Ok(deleting.clone()),
             Ok(recreated.clone()),
             Ok(recreated.clone()),
             Ok(updated.clone()),
@@ -588,13 +614,13 @@ mod tests {
             Ok(missing_generation.clone()),
         ])
         .predicate_filter(
-            predicates::generation,
+            resource_sync_predicate,
             PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
         )
         .collect::<Vec<_>>()
         .await;
 
-        assert_eq!(events.len(), 6);
+        assert_eq!(events.len(), 9);
         assert!(matches!(
             events.remove(1),
             Err(watcher::Error::NoResourceVersion)
@@ -607,11 +633,39 @@ mod tests {
             objects,
             [
                 json!(original),
+                json!(deletion_disabled),
+                json!(force_delete),
+                json!(deleting),
                 json!(recreated),
                 json!(updated),
                 json!(missing_generation),
                 json!(missing_generation)
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::local_disable(false, crate::resources::DISABLE_TARGET_DELETION_ANNOTATION)]
+    #[case::remote_disable(true, crate::resources::DISABLE_TARGET_DELETION_ANNOTATION)]
+    #[case::local_force(false, crate::resources::FORCE_DELETE_ANNOTATION)]
+    #[case::remote_force(true, crate::resources::FORCE_DELETE_ANNOTATION)]
+    fn resource_sync_predicate_tracks_deletion_annotations_for_both_target_scopes(
+        #[case] remote: bool,
+        #[case] annotation: &str,
+    ) {
+        let mut before = sync_fixture();
+        if remote {
+            before.spec.target.cluster = Some(Default::default());
+        }
+        let mut after = before.clone();
+        after.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            annotation.into(),
+            "true".into(),
+        )]));
+
+        assert_ne!(
+            resource_sync_predicate(&before),
+            resource_sync_predicate(&after)
         );
     }
 

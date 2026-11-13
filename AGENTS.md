@@ -67,9 +67,10 @@ the latter case, keep the change minimal and explain why it is necessary and whi
   when changing field ownership or event handling.
 - **Watch lifecycle:** [remote_watcher_manager.rs](src/remote_watcher_manager.rs) keys watches by resource reference
   and owning sync, for both local and remote resources. Preserve watcher cancellation and joining during cleanup and
-  shutdown. The main `ResourceSync` stream uses kube's generation predicate with UID-aware caching and a 24-hour idle
-  TTL. Kubeconfig Secret changes are not explicit triggers. Read [event and retry behavior](README.md#status-and-observability)
-  before changing configuration refresh or reconciliation scheduling.
+  shutdown. The main `ResourceSync` stream hashes generation, deletion state, and deletion-control annotations with
+  UID-aware caching and a 24-hour idle TTL. Kubeconfig Secret changes are not explicit triggers. Read
+  [event and retry behavior](README.md#status-and-observability) before changing configuration refresh or reconciliation
+  scheduling.
 - **Status:** In [controller.rs](src/controller.rs), compute `ResourceSyncFailing` from live status, not the reflector
   cache. Success clears failure, unchanged condition values retain `lastTransitionTime`, and successful deletion
   cleanup skips the status write because the object may already be gone. Preserve the regression coverage for these
@@ -78,8 +79,9 @@ the latter case, keep the change minimal and explain why it is necessary and whi
   cleanup. Preserve unrelated finalizers. Normal cleanup waits for target absence before stopping watches and removing
   Sinker's finalizer. Both APIs are resolved before cleanup; `force-delete` only bypasses failures at that resolution
   step. Local namespaced targets receive a Sinker owner reference only when target deletion is enabled; local
-  cluster-scoped targets receive none. Metadata-only annotation changes may not trigger a new apply, so account for
-  existing owner references when changing target scope or retention behavior.
+  cluster-scoped targets receive none. Changing a deletion-control annotation's effective Boolean value triggers
+  reconciliation. A successful target apply removes Sinker's omitted owner reference if no other manager owns it;
+  deletion skips that apply. Account for existing references when changing target scope or retention behavior.
 
 ## CRD generation
 
