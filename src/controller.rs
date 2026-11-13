@@ -195,29 +195,28 @@ async fn reconcile_normally(
             )?
         };
 
-        // A namespaced ResourceSync can own only a target in its own namespace.
-        // Cluster-scoped targets and kubeconfig targets rely on explicit cleanup instead.
-        if resource_sync.spec.target.cluster.to_owned().is_none()
+        // Owner-based garbage collection must not override disable-target-deletion.
+        // A namespaced ResourceSync can own only a local target in its namespace;
+        // cluster-scoped and kubeconfig targets do not receive this reference.
+        if resource_sync.spec.target.cluster.is_none()
             && !resource_sync.has_disable_target_deletion_option_enabled()
             && target_api
                 .namespace
                 .as_ref()
                 .eq(&resource_sync.metadata.namespace.as_ref())
         {
-            {
-                target.owner_references_mut().push(OwnerReference {
-                    api_version: ResourceSync::api_version(&()).to_string(),
-                    kind: ResourceSync::kind(&()).to_string(),
-                    name: name.to_owned(),
-                    uid: resource_sync
-                        .metadata
-                        .uid
-                        .to_owned()
-                        .ok_or(Error::UIDRequired)?,
-                    controller: Some(false),
-                    block_owner_deletion: Some(true),
-                });
-            }
+            target.owner_references_mut().push(OwnerReference {
+                api_version: ResourceSync::api_version(&()).to_string(),
+                kind: ResourceSync::kind(&()).to_string(),
+                name: name.to_owned(),
+                uid: resource_sync
+                    .metadata
+                    .uid
+                    .to_owned()
+                    .ok_or(Error::UIDRequired)?,
+                controller: Some(false),
+                block_owner_deletion: Some(true),
+            });
         }
 
         target
@@ -949,16 +948,30 @@ mod tests {
     }
 
     #[rstest]
-    #[case::whole_resource(false, false)]
-    #[case::mapped_resource(true, false)]
-    #[case::remote_target(false, true)]
-    #[case::mapped_remote_target(true, true)]
+    #[case::whole_resource(false, false, false, true)]
+    #[case::mapped_resource(true, false, false, true)]
+    #[case::remote_target(false, true, false, true)]
+    #[case::mapped_remote_target(true, true, false, true)]
+    #[case::local_deletion_disabled(false, false, true, true)]
+    #[case::mapped_local_deletion_disabled_without_uid(true, false, true, false)]
+    #[case::remote_deletion_disabled_without_uid(false, true, true, false)]
     #[tokio::test]
-    async fn target_apply_uses_forced_field_manager_and_local_ownership(
+    async fn target_apply_uses_forced_field_manager_and_conditional_ownership(
         #[case] mapped: bool,
         #[case] remote: bool,
+        #[case] deletion_disabled: bool,
+        #[case] uid_present: bool,
     ) {
         let mut sync = sync_fixture();
+        if deletion_disabled {
+            sync.metadata.annotations = Some(std::collections::BTreeMap::from([(
+                crate::resources::DISABLE_TARGET_DELETION_ANNOTATION.into(),
+                "true".into(),
+            )]));
+        }
+        if !uid_present {
+            sync.metadata.uid = None;
+        }
         if mapped {
             sync.spec.mappings = vec![crate::resources::Mapping {
                 from_field_path: Some("data.original".into()),
@@ -1028,7 +1041,7 @@ mod tests {
                 json!({"original": "value"})
             }
         );
-        if remote {
+        if remote || deletion_disabled {
             assert!(patch.body()["metadata"].get("ownerReferences").is_none());
         } else {
             assert_eq!(

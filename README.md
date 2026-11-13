@@ -282,15 +282,18 @@ These annotations belong to the **ResourceSync** and are enabled only by the str
 
 | Annotation | Effect |
 | --- | --- |
-| `sinker.influxdata.io/disable-target-deletion: "true"` | Skip Sinker issuing the target delete request, stop watches, and remove Sinker's finalizer. |
+| `sinker.influxdata.io/disable-target-deletion: "true"` | Skip Sinker's target delete request and owner reference, stop watches, and remove Sinker's finalizer. The owner-reference change applies when Sinker next applies a local namespaced target. |
 | `sinker.influxdata.io/force-delete: "true"` | During deletion, remove Sinker's finalizer if constructing either source or target API fails, for example because credentials or a remote API are unavailable. It does not bypass errors from subsequent target GET/DELETE requests or a target's finalizers. |
 
 Both source and target APIs are resolved before normal cleanup, even with `disable-target-deletion`. An unavailable
 source cluster can therefore block cleanup too. Force deletion can leave a target behind for manual cleanup.
 
-Local namespaced targets (`target.cluster` omitted) receive an owner reference to the `ResourceSync` in the same namespace.
-**Disabling target deletion alone does not retain these targets**: Kubernetes garbage collection can still delete them.
-Retention must also account for Kubernetes [orphaning behavior](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#orphaned-dependents).
+Local namespaced targets (`target.cluster` omitted) receive an owner reference to the `ResourceSync` in the same namespace
+unless `sinker.influxdata.io/disable-target-deletion` is `"true"` when Sinker applies the target. Set it before creating the sync
+to have Sinker skip both the delete request and its owner reference. If you add it later, verify the target's
+`metadata.ownerReferences` before deleting the sync: metadata-only `ResourceSync` changes are normally filtered, so the
+target may still have an owner reference from an earlier apply. Existing owner references from other controllers also
+affect retention; see Kubernetes [orphaning behavior](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#orphaned-dependents).
 Local cluster-scoped targets receive no Sinker owner reference, following Kubernetes
 [owner scope rules](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#owners-and-dependents).
 For those targets, `disable-target-deletion` skips Sinker's delete request without a Sinker owner reference triggering
