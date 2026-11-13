@@ -176,7 +176,7 @@ The two namespace fields have different meanings:
 | `cluster.namespace` | Namespace of the source/target in the **referenced cluster**. | Selected kubeconfig context's namespace, or `default`. |
 
 Discovery determines whether a kind is namespaced or cluster-scoped. Cluster-scoped API requests use no resource
-namespace; see the [local target ownership limitation](#annotations-and-finalizers) before using such a target.
+namespace; see [target ownership and deletion](#annotations-and-finalizers) when using such a target.
 
 Create the kubeconfig Secret in an existing namespace. This example authorizes syncs in `default` to use credentials
 stored in `cluster-credentials`:
@@ -288,11 +288,13 @@ These annotations belong to the **ResourceSync** and are enabled only by the str
 Both source and target APIs are resolved before normal cleanup, even with `disable-target-deletion`. An unavailable
 source cluster can therefore block cleanup too. Force deletion can leave a target behind for manual cleanup.
 
-Local targets (`target.cluster` omitted) also receive an owner reference to the namespaced `ResourceSync`.
-**Disabling target deletion alone does not retain a local target**: Kubernetes garbage collection can still delete it.
+Local namespaced targets (`target.cluster` omitted) receive an owner reference to the `ResourceSync` in the same namespace.
+**Disabling target deletion alone does not retain these targets**: Kubernetes garbage collection can still delete them.
 Retention must also account for Kubernetes [orphaning behavior](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#orphaned-dependents).
-The controller currently adds this owner reference even to a local cluster-scoped target, which conflicts with Kubernetes
+Local cluster-scoped targets receive no Sinker owner reference, following Kubernetes
 [owner scope rules](https://kubernetes.io/docs/concepts/architecture/garbage-collection/#owners-and-dependents).
+For those targets, `disable-target-deletion` skips Sinker's delete request without a Sinker owner reference triggering
+garbage collection.
 Targets configured through a kubeconfig receive no Sinker owner reference, even if that kubeconfig points at the local cluster.
 
 ## Status and observability

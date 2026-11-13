@@ -77,8 +77,9 @@ the latter case, keep the change minimal and explain why it is necessary and whi
 - **Deletion and ownership:** Read [Annotations and finalizers](README.md#annotations-and-finalizers) before changing
   cleanup. Preserve unrelated finalizers. Normal cleanup waits for target absence before stopping watches and removing
   Sinker's finalizer. Both APIs are resolved before cleanup; `force-delete` only bypasses failures at that resolution
-  step. Local targets also have an owner reference, so `disable-target-deletion` alone does not retain them. Account for
-  the documented local cluster-scoped ownership limitation when changing target scope or retention behavior.
+  step. Local namespaced targets have an owner reference, so `disable-target-deletion` alone does not retain them;
+  local cluster-scoped targets receive no Sinker owner reference. Account for this difference when changing target scope
+  or retention behavior.
 
 ## CRD generation
 

@@ -195,7 +195,8 @@ async fn reconcile_normally(
             )?
         };
 
-        // If the target is local and namespace-scoped then add an owner reference to it
+        // A namespaced ResourceSync can own only a target in its own namespace.
+        // Cluster-scoped targets and kubeconfig targets rely on explicit cleanup instead.
         match resource_sync.spec.target.cluster.to_owned() {
             None if target_api
                 .namespace
@@ -1036,6 +1037,76 @@ mod tests {
                 "uid": "sync-uid", "controller": false, "blockOwnerDeletion": true}])
             );
         }
+    }
+
+    #[rstest]
+    #[case::with_uid(Some("sync-uid"))]
+    #[case::without_uid(None)]
+    #[tokio::test]
+    async fn local_cluster_scoped_target_has_no_owner_reference(#[case] uid: Option<&str>) {
+        let mut sync = sync_fixture();
+        sync.spec.source.resource_ref.kind = "Namespace".into();
+        sync.spec.target.resource_ref.kind = "Namespace".into();
+        sync.metadata.uid = uid.map(str::to_string);
+        let source = json!({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+                "name": "source-config",
+                "labels": {"example.com/source": "yes"}
+            }
+        });
+        let mock = MockApi::new(vec![
+            discovery_response("Namespace", "namespaces", false),
+            discovery_response("Namespace", "namespaces", false),
+            response(200, source.clone()),
+            response(200, source),
+        ]);
+        let source_api = sync
+            .spec
+            .source
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("source API");
+        let target_api = sync
+            .spec
+            .target
+            .api_for(mock.client.clone(), "team-a")
+            .await
+            .expect("target API");
+        assert_eq!(target_api.namespace, None);
+        let ctx = context(mock.client.clone());
+        let _cancelled =
+            crate::remote_watcher_manager::tests::park_watchers(&ctx.remote_watcher_manager, &sync)
+                .await;
+
+        let result = reconcile_normally(
+            Arc::new(sync),
+            "copy-config",
+            source_api,
+            target_api,
+            Arc::clone(&ctx),
+        )
+        .await;
+        stop_watches(&ctx).await;
+        assert_eq!(
+            result.expect("apply cluster-scoped target"),
+            Action::await_change()
+        );
+        let requests = mock.finish(&[
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1"),
+            ("GET", "/api/v1/namespaces/source-config"),
+            ("PATCH", "/api/v1/namespaces/target-config"),
+        ]);
+        let patch = &requests[3];
+        assert_eq!(patch.body()["metadata"]["name"], "target-config");
+        assert!(patch.body()["metadata"].get("namespace").is_none());
+        assert!(patch.body()["metadata"].get("ownerReferences").is_none());
+        assert_eq!(
+            patch.body()["metadata"]["labels"],
+            json!({"example.com/source": "yes"})
+        );
     }
 
     #[test]
