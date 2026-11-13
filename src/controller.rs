@@ -197,11 +197,13 @@ async fn reconcile_normally(
 
         // A namespaced ResourceSync can own only a target in its own namespace.
         // Cluster-scoped targets and kubeconfig targets rely on explicit cleanup instead.
-        match resource_sync.spec.target.cluster.to_owned() {
-            None if target_api
+        if resource_sync.spec.target.cluster.to_owned().is_none()
+            && !resource_sync.has_disable_target_deletion_option_enabled()
+            && target_api
                 .namespace
                 .as_ref()
-                .eq(&resource_sync.metadata.namespace.as_ref()) =>
+                .eq(&resource_sync.metadata.namespace.as_ref())
+        {
             {
                 target.owner_references_mut().push(OwnerReference {
                     api_version: ResourceSync::api_version(&()).to_string(),
@@ -215,11 +217,10 @@ async fn reconcile_normally(
                     controller: Some(false),
                     block_owner_deletion: Some(true),
                 });
-
-                target
             }
-            _ => target,
         }
+
+        target
     };
 
     debug!(?target, "produced target object");
