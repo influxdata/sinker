@@ -3,7 +3,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, 
 use k8s_openapi::jiff::Timestamp;
 use kube::api::DeleteParams;
 use kube::api::Patch::Merge;
-use kube::runtime::{predicates, reflector, PredicateConfig, WatchStreamExt};
+use kube::runtime::{reflector, PredicateConfig, WatchStreamExt};
 use kube::{
     api::{ListParams, Patch, PatchParams},
     runtime::{
@@ -13,6 +13,7 @@ use kube::{
     Api, Client, Resource, ResourceExt,
 };
 use serde_json::json;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::string::ToString;
 use std::{sync::Arc, time::Duration};
 #[allow(unused_imports)]
@@ -238,8 +239,6 @@ async fn reconcile_normally(
     Ok(Action::await_change())
 }
 
-// TODO: If secrets for remote clusters on target and source (when applicable) no longer exist then simply allow the ResourceSync to be deleted by removing the finalizer
-
 #[expect(
     clippy::result_large_err,
     reason = "Preserve the public Error variants without boxing"
@@ -442,7 +441,6 @@ fn sync_failing_transition_time(status: &Option<ResourceSyncStatus>, new_status:
 fn error_policy(resource_sync: Arc<ResourceSync>, error: &Error, _ctx: Arc<Context>) -> Action {
     let name = resource_sync.name_any();
     warn!(?name, %error, "reconcile failed");
-    // TODO(mkm): make error requeue duration configurable
     Action::requeue(Duration::from_secs(5))
 }
 
@@ -483,7 +481,7 @@ pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Res
         .reflect(writer)
         .applied_objects()
         .predicate_filter(
-            predicates::generation,
+            resource_sync_predicate,
             PredicateConfig::default().ttl(RESOURCE_SYNC_PREDICATE_TTL),
         );
 
@@ -512,6 +510,27 @@ pub async fn run_with_metrics(client: Client, metrics: ControllerMetrics) -> Res
     ctx.remote_watcher_manager.stop_all().await;
 
     Ok(())
+}
+
+#[derive(Hash)]
+struct ResourceSyncHashContainer {
+    generation: Option<i64>,
+    force_delete: Option<bool>,
+}
+
+pub fn resource_sync_predicate(obj: &ResourceSync) -> Option<u64> {
+    let container = ResourceSyncHashContainer {
+        generation: obj.meta().generation,
+        force_delete: match obj.spec.target.cluster {
+            None => Some(obj.has_force_delete_option_enabled()),
+            Some(_) => None,
+        },
+    };
+
+    let mut hasher = DefaultHasher::new();
+    container.hash(&mut hasher);
+
+    Some(hasher.finish())
 }
 
 #[cfg(test)]
