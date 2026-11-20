@@ -1,6 +1,3 @@
-use std::ops::Deref;
-use std::sync::Arc;
-
 use crate::controller::Context;
 use crate::remote_watcher::RemoteWatcherKey;
 use crate::resources::{
@@ -14,6 +11,9 @@ use kube::discovery::Scope::*;
 use kube::runtime::reflector::ObjectRef;
 use kube::{discovery, Api, Client, Config, ResourceExt};
 use regex::Regex;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::debug;
 
 macro_rules! rs_watch {
@@ -152,6 +152,7 @@ async fn cluster_client(
                 )?;
                 let mut config =
                     Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
+                config.read_timeout = Some(Duration::from_secs(30));
 
                 if let Some(ref namespace) = cluster_ref.namespace {
                     config.default_namespace = namespace.clone();
