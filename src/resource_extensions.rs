@@ -16,6 +16,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::debug;
 
+/// Read timeout for remote cluster clients.
+///
+/// This is an idle timeout on the socket, so it also applies to open watches. It must be
+/// longer than the 290s server-side watch timeout (and the ~60s gap between bookmarks),
+/// otherwise every healthy watch on a quiet object is torn down and restarted. Its job is to
+/// turn a silently dead connection into an error so the remote watcher reconnects.
+const REMOTE_CLIENT_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
 macro_rules! rs_watch {
     ($fn_name:ident, $method:ident) => {
         pub async fn $fn_name(&self, ctx: Arc<Context>) {
@@ -152,7 +160,7 @@ async fn cluster_client(
                 )?;
                 let mut config =
                     Config::from_custom_kubeconfig(kube_config, &Default::default()).await?;
-                config.read_timeout = Some(Duration::from_secs(30));
+                config.read_timeout = Some(REMOTE_CLIENT_READ_TIMEOUT);
 
                 if let Some(ref namespace) = cluster_ref.namespace {
                     config.default_namespace = namespace.clone();
